@@ -1,0 +1,23 @@
+# EXAMPLE ONLY: replace coordinates with your existing arena above SMP spawn.
+# Never creates worlds or modifies blocks. Disabled until explicitly configured.
+name: Spawn Arena
+enabled: false
+world: world
+pos1: world,-16,180,-16
+pos2: world,16,194,16
+player-spawns:
+  - world,0.5,181,0.5,0,0
+mob-spawns:
+  - world,10.5,181,10.5,180,0
+  - world,-10.5,181,-10.5,0,0
+exit: world,0.5,65,30.5,180,0
+# Fixed location for outsiders; falls back to exit if unset. Must be safe/outside.
+outsider-exit: world,0.5,65,30.5,180,0
+min-players: 1
+max-players: 4
+countdown-seconds: 15
+difficulty-multiplier: 1.0
+max-active-mobs: 100
+max-waves: 30
+# Optional; requires an installed WorldGuard and an existing containing region.
+worldguard-region: ''

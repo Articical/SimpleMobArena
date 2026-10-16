@@ -1,7 +1,5 @@
 package cloud.mineplay.mobarena.enums;
 
 public enum GameState {
-	
-	EMPTY, FILLING, FULL
-
+    WAITING, COUNTDOWN, ACTIVE, INTERMISSION, ENDING, FINISHED
 }

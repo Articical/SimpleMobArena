@@ -1,0 +1,166 @@
+# Paper 26.3 / Java 25. Economy values are starting balances, tune for your SMP.
+storage:
+  # SQLITE stores mobarena.db + equipment.db locally. MYSQL stores both schemas.
+  # Stop the server and use the documented migration command before switching.
+  type: SQLITE
+  mysql:
+    host: localhost
+    port: 3306
+    database: mobarena
+    username: mobarena
+    password: ''
+    password-env: ''
+    use-ssl: true
+
+equipment:
+  mode: BOTH # PERSONAL, CLASS, BOTH
+  personal:
+    preserve-durability: false
+    restore-consumables: false
+  # No-transfer, no-drop and no-block-edit rules are mandatory for class safety.
+  # Normal personal durability and consumables are spent by default.
+
+waves:
+  base-mobs: 5
+  mobs-per-wave-per-player: 1
+  health-increase-percent: 20
+  health-increase-every-waves: 5
+  max-active-mobs: 100 # Includes chicken mounts. Each rider is one kill.
+  max-mobs-per-wave: 500
+  max-waves: 30
+  spawn-interval-ticks: 10
+  spawn-batch-size: 2
+  intermission-seconds: 8
+  maximum-wave-seconds: 600 # Missing/stuck/expired waves cancel without rewards.
+  heal-between-waves: true
+  # Slots choose one alternative from the cumulative probabilities below.
+  # Remaining probability means an empty slot. All drops and XP are suppressed.
+  # Undead have sunlight burning disabled through Paper's API (not helmets).
+  mobs:
+    ZOMBIE:
+      unlock-wave: 1
+      weight: 24
+      health-multiplier: 1.0
+      baby-chance: 0.12
+      chicken-jockey-chance: 0.015
+      equipment:
+        hand:
+          - {material: STONE_SWORD, chance: 0.25}
+          - {material: IRON_SHOVEL, chance: 0.10}
+          - {material: IRON_SWORD, chance: 0.05}
+        off_hand:
+          - {material: SHIELD, chance: 0.12}
+        head:
+          - {material: LEATHER_HELMET, chance: 0.15}
+          - {material: CHAINMAIL_HELMET, chance: 0.05}
+        chest:
+          - {material: LEATHER_CHESTPLATE, chance: 0.12}
+    SKELETON:
+      unlock-wave: 1
+      weight: 18
+      health-multiplier: 1.0
+      equipment:
+        hand:
+          - {material: BOW, chance: 0.90}
+          - {material: STONE_SWORD, chance: 0.10}
+        head:
+          - {material: CHAINMAIL_HELMET, chance: 0.12}
+        chest:
+          - {material: LEATHER_CHESTPLATE, chance: 0.10}
+    SPIDER:
+      unlock-wave: 1
+      weight: 10
+      health-multiplier: 1.1
+    DROWNED:
+      unlock-wave: 2
+      weight: 12
+      health-multiplier: 1.1
+      baby-chance: 0.06
+      equipment:
+        hand:
+          - {material: TRIDENT, chance: 0.18}
+          - {material: STONE_SWORD, chance: 0.22}
+        off_hand:
+          - {material: SHIELD, chance: 0.06}
+    HUSK:
+      unlock-wave: 3
+      weight: 9
+      health-multiplier: 1.15
+      baby-chance: 0.08
+      equipment:
+        hand:
+          - {material: STONE_AXE, chance: 0.25}
+        off_hand:
+          - {material: SHIELD, chance: 0.10}
+    CREEPER:
+      unlock-wave: 3
+      weight: 5
+      health-multiplier: 1.0
+    STRAY:
+      unlock-wave: 5
+      weight: 8
+      health-multiplier: 1.1
+      equipment:
+        hand:
+          - {material: BOW, chance: 1.0}
+        head:
+          - {material: IRON_HELMET, chance: 0.15}
+    CAVE_SPIDER:
+      unlock-wave: 6
+      weight: 4
+      health-multiplier: 1.2
+    BLAZE:
+      unlock-wave: 8
+      weight: 4
+      health-multiplier: 1.0
+    WITHER_SKELETON:
+      unlock-wave: 10
+      weight: 5
+      health-multiplier: 1.25
+      equipment:
+        hand:
+          - {material: STONE_SWORD, chance: 0.75}
+          - {material: IRON_SWORD, chance: 0.25}
+        off_hand:
+          - {material: SHIELD, chance: 0.10}
+    VINDICATOR:
+      unlock-wave: 12
+      weight: 3
+      health-multiplier: 1.0
+      equipment:
+        hand:
+          - {material: IRON_AXE, chance: 1.0}
+
+economy:
+  enabled: true # false suspends payments; gameplay remains available.
+  provider: VAULT
+  reward:
+    mode: KILL_SHARE
+    base-wave-reward: 100.0
+    multiply-by-wave: true
+    only-completed-waves: true
+    minimum-reward-wave: 3
+  player-scaling:
+    enabled: true
+    additional-player-multiplier: 0.25
+    maximum-multiplier: 2.0
+    snapshot-on-start: true
+  limits:
+    maximum-pot-per-session: 50000.0
+    maximum-player-payout-per-session: 25000.0
+    maximum-daily-payout-per-player: 50000.0
+    reward-cooldown-minutes: 15
+    minimum-participation-seconds: 60
+  distribution:
+    use-player-kills: true
+    include-eliminated-players: true
+    include-voluntary-leavers: true
+    rounding-scale: 2
+    zero-kills-policy: NO_PAYOUT
+  short-session:
+    threshold-seconds: 0 # 0 disables the reduction.
+    multiplier: 1.0
+  audit:
+    enabled: true
+    persist-settlements: true
+    log-payments: true

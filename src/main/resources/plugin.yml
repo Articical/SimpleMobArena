@@ -1,0 +1,90 @@
+name: SimpleMobArena
+version: '${version}'
+main: cloud.mineplay.mobarena.SimpleMobArena
+api-version: '26.3'
+description: Cooperative physical arenas with recoverable equipment and audited Vault rewards.
+authors: [Mineplay]
+website: https://github.com/Articical/SimpleMobArena
+softdepend: [Vault, Essentials, WorldGuard, PlaceholderAPI]
+commands:
+  mobarena:
+    description: Open MobArena or manage participation.
+    aliases: [ma]
+    usage: /<command> [join|leave|list|info|stats|history|match|top|admin]
+permissions:
+  mobarena.use:
+    description: Open the arena menu and view arena information.
+    default: true
+  mobarena.join:
+    description: Join arenas and select equipment.
+    default: true
+  mobarena.stats:
+    description: View personal arena statistics.
+    default: true
+  mobarena.stats.others:
+    description: View another player's arena statistics.
+    default: op
+  mobarena.history:
+    description: View personal match and payout history.
+    default: true
+  mobarena.match:
+    description: View completed arena match details and participant results.
+    default: true
+  mobarena.top:
+    description: View the arena leaderboard.
+    default: true
+  mobarena.admin:
+    description: All MobArena administrative actions.
+    default: op
+    children:
+      mobarena.admin.create: true
+      mobarena.admin.delete: true
+      mobarena.admin.setplayer: true
+      mobarena.admin.setmob: true
+      mobarena.admin.setexit: true
+      mobarena.admin.setoutsider: true
+      mobarena.admin.setpos1: true
+      mobarena.admin.setpos2: true
+      mobarena.admin.start: true
+      mobarena.admin.stop: true
+      mobarena.admin.forcewave: true
+      mobarena.admin.reload: true
+      mobarena.admin.status: true
+      mobarena.admin.enable: true
+      mobarena.admin.economy: true
+      mobarena.admin.payouts: true
+      mobarena.admin.reconcile: true
+  mobarena.admin.create:
+    default: op
+  mobarena.admin.delete:
+    default: op
+  mobarena.admin.setplayer:
+    default: op
+  mobarena.admin.setmob:
+    default: op
+  mobarena.admin.setexit:
+    default: op
+  mobarena.admin.setoutsider:
+    default: op
+  mobarena.admin.setpos1:
+    default: op
+  mobarena.admin.setpos2:
+    default: op
+  mobarena.admin.start:
+    default: op
+  mobarena.admin.stop:
+    default: op
+  mobarena.admin.forcewave:
+    default: op
+  mobarena.admin.reload:
+    default: op
+  mobarena.admin.status:
+    default: op
+  mobarena.admin.enable:
+    default: op
+  mobarena.admin.economy:
+    default: op
+  mobarena.admin.payouts:
+    default: op
+  mobarena.admin.reconcile:
+    default: op
