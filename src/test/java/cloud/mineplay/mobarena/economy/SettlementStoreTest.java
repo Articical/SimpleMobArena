@@ -222,6 +222,33 @@ class SettlementStoreTest {
         }
     }
 
+    @Test void statisticsAndLeaderboardUseTheLatestRecordedNameWithoutExternalLookups() throws Exception {
+        try (var store = store()) {
+            var newest = new SessionResult(new UUID(0, 3), "spawn", START.plusSeconds(300), START.plusSeconds(420), 3,
+                    BigDecimal.TEN, List.of(new SessionResult.Participant(PLAYER, ".Bedrock Player", 3, 60, 120)), false);
+            var older = new SessionResult(new UUID(0, 1), "spawn", START, START.plusSeconds(120), 3,
+                    BigDecimal.TEN, List.of(new SessionResult.Participant(PLAYER, "PreviousName", 2, 40, 120)), false);
+            var sameFinish = new SessionResult(new UUID(0, 2), "spawn", START.plusSeconds(300), START.plusSeconds(420), 3,
+                    BigDecimal.TEN, List.of(new SessionResult.Participant(PLAYER, "EarlierTie", 1, 20, 120)), false);
+            store.prepare(newest, settings(), START.plusSeconds(420));
+            store.prepare(older, settings(), START.plusSeconds(421));
+            store.prepare(sameFinish, settings(), START.plusSeconds(422));
+            assertEquals(".Bedrock Player", store.stats(PLAYER).playerName());
+            assertEquals(".Bedrock Player", store.top(10).getFirst().playerName());
+            assertEquals(6, store.stats(PLAYER).kills());
+        }
+    }
+
+    @Test void missingNamesRetainTheFullPlayerUuid() throws Exception {
+        try (var store = store()) {
+            assertEquals(PLAYER.toString(), store.stats(PLAYER).playerName());
+            store.prepare(result(START, "100", false), settings(), START.plusSeconds(120));
+            assertEquals(PLAYER.toString(), store.stats(PLAYER).playerName());
+        }
+        assertEquals(PLAYER.toString(), new PlayerStatistics(PLAYER, 0, 0, 0, 0, BigDecimal.ZERO, null).playerName());
+        assertEquals(PLAYER.toString(), new PlayerStatistics(PLAYER, 0, 0, 0, 0, BigDecimal.ZERO, " ").playerName());
+    }
+
     private SettlementStore store() throws Exception { return new SettlementStore(directory.resolve("mobarena.db")); }
     private static EconomySettings settings() { return policy("1000", "1000", "10000", 0, 0, 0, 0, "1"); }
     private static SessionResult result(Instant start, String pot, boolean cancelled) {

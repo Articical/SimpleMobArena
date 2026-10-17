@@ -131,7 +131,7 @@ public final class ArenaListener implements Listener {
         String root=parts[0];
         if (root.startsWith("simplemobarena:")) root=root.substring("simplemobarena:".length());
         boolean allowed=resolved!=null && resolved.getPlugin()==plugin && (root.equals("ma") || root.equals("mobarena"))
-            && (parts.length==1 || Set.of("leave","info","stats","list","history","match","top").contains(parts[1]));
+            && (parts.length==1 || Set.of("leave","info","classes","stats","list","history","match","top").contains(parts[1]));
         if (!allowed) { e.setCancelled(true); e.getPlayer().sendMessage(ArenaMessages.warning("Only match commands are available. Use /ma leave to exit.")); }
     }
     @EventHandler(priority=EventPriority.HIGHEST,ignoreCancelled=true)

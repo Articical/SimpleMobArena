@@ -274,9 +274,11 @@ public final class Arena {
             prizePot = plugin.getEconomyService().capPot(prizePot.add(plugin.getEconomyService().waveReward(wave,startingPlayers)));
             state.transition(GameState.INTERMISSION);
             Bukkit.getPluginManager().callEvent(new ArenaWaveCompleteEvent(this,wave));
-            announce(ArenaMessages.success("Wave "+wave+" complete! Prize pot: $"+displayPot()+" (before eligibility and caps)."));
-            announce(MatchMessages.rewardProgress(plugin.getEconomyService().rewardSettings(),completedWaves));
-            if (wave < definition.maxWaves) sounds.play(Cue.WAVE_COMPLETE,getPlayers());
+            if (wave < definition.maxWaves) {
+                announce(ArenaMessages.success("Wave "+wave+" cleared! Prize pot: $"+displayPot()+"."));
+                announce(MatchMessages.rewardProgress(plugin.getEconomyService().rewardSettings(),completedWaves));
+                sounds.play(Cue.WAVE_COMPLETE,getPlayers());
+            }
             if (plugin.getConfig().getBoolean("waves.heal-between-waves",true)) getPlayers().forEach(Arena::heal);
             if (wave >= definition.maxWaves) finish(false,"All waves completed!");
             else deadline = plugin.ticks()+definition.intermissionSeconds*20L;
@@ -296,14 +298,11 @@ public final class Arena {
         // The departing player is no longer in getPlayers(), so their result must be delivered directly.
         if (player.isOnline()) sendPersonalFeedback(player,() -> {
             if (startedAt != null && p != null) {
-                int totalKills = getTotalKills();
-                BigDecimal estimated = totalKills == 0 ? BigDecimal.ZERO.setScale(2)
-                    : prizePot.multiply(BigDecimal.valueOf(p.kills)).divide(BigDecimal.valueOf(totalKills),2,java.math.RoundingMode.DOWN);
                 var summary = new MatchMessages.ExitSummary(getName(),sessionId,reason,"was eliminated".equals(reason),
-                    p.kills,p.damage,wave,completedWaves,p.seconds(leftAt),estimated,!state.active().isEmpty());
+                    p.kills,p.damage,wave,completedWaves,p.seconds(leftAt),BigDecimal.ZERO,!state.active().isEmpty());
                 sendPersonalFeedback(player,() -> player.showTitle(MatchMessages.eliminationTitle(summary)));
                 MatchMessages.elimination(summary).forEach(player::sendMessage);
-            } else player.sendMessage(ArenaMessages.info("You left the arena lobby. No match had started."));
+            } else player.sendMessage(ArenaMessages.info("You left the lobby."));
         });
         if (startedAt == null) participants.remove(id);
         plugin.getArenaManager().release(id);
@@ -332,13 +331,19 @@ public final class Arena {
             announcements.finished(cancelled,completedWaves,remainingPlayers);
             sounds.play(cancelled ? Cue.CANCELLED : Cue.MATCH_END,remainingPlayers);
         }
-        String announcement = reason == null || reason.isBlank() ? (cancelled ? "Match cancelled. No payout." : "Match complete!") : reason;
-        announce(cancelled ? ArenaMessages.error(announcement) : ArenaMessages.success(announcement));
+        if (cancelled && reason != null && !reason.isBlank()) announce(ArenaMessages.error(reason));
         Instant clockTime = Instant.now();
         Instant finish = startedAt != null && clockTime.isBefore(startedAt) ? startedAt : clockTime;
         for (Player player : getPlayers()) {
             UUID id = player.getUniqueId(); state.eliminate(id);
-            participants.get(id).leave(finish); plugin.getArenaManager().release(id);
+            Participation participation = participants.get(id);
+            participation.leave(finish);
+            if (startedAt != null && !cancelled) sendPersonalFeedback(player, () -> {
+                var summary = new MatchMessages.ExitSummary(getName(),sessionId,reason,false,
+                    participation.kills,participation.damage,wave,completedWaves,participation.seconds(finish),BigDecimal.ZERO,false);
+                MatchMessages.completed(summary).forEach(player::sendMessage);
+            });
+            plugin.getArenaManager().release(id);
             plugin.getEquipmentService().restore(player,definition.exit,() -> {});
         }
         removeAllMobs();

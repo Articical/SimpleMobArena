@@ -1,9 +1,11 @@
-# All kit content is configuration, not game-engine code. Slots are 0-35.
+# Class unlocks use a player's saved lifetime arena kills. Item slots are 0-35.
 # Enchantment/effect identifiers use Minecraft registry names.
 # Potion amplifiers are zero based; duration -1 lasts for the arena visit.
 classes:
   knight:
     display-name: Knight
+    icon: IRON_SWORD
+    required-kills: 0
     items:
       '0':
         material: IRON_SWORD
@@ -20,6 +22,8 @@ classes:
     offhand: { material: SHIELD }
   archer:
     display-name: Archer
+    icon: BOW
+    required-kills: 100
     items:
       '0':
         material: BOW
@@ -36,6 +40,8 @@ classes:
       boots: { material: CHAINMAIL_BOOTS }
   tank:
     display-name: Tank
+    icon: SHIELD
+    required-kills: 500
     items:
       '0': { material: STONE_SWORD }
       '1': { material: COOKED_BEEF, amount: 16 }
@@ -52,6 +58,8 @@ classes:
       slowness: { amplifier: 0, duration-ticks: -1 }
   berserker:
     display-name: Berserker
+    icon: DIAMOND_AXE
+    required-kills: 1000
     items:
       '0':
         material: DIAMOND_AXE

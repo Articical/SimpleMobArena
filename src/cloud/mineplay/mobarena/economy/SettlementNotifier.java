@@ -88,19 +88,19 @@ final class SettlementNotifier {
     }
 
     static Component message(String arenaId, Settlement settlement, EconomySettings policy) {
-        String context = arenaId + " #" + settlement.sessionId().toString().substring(0, 8) + ": ";
+        String context = arenaId + ": ";
         String amount = settlement.intendedAmount().toPlainString();
-        String history = " Use /ma history for details.";
         String caps = reasons(settlement.capsApplied(), policy);
         return switch (settlement.status()) {
-            case CONFIRMED -> ArenaMessages.success(context + "Paid $" + amount + "." + history);
-            case PENDING, PROCESSING -> ArenaMessages.info(context + "Reward $" + amount + " awaiting payment."
-                    + (caps.isEmpty() ? "" : " Adjustments: " + caps + ".") + history);
-            case WITHHELD -> ArenaMessages.warning(context + "Reward $0; no payment: "
-                    + (caps.isEmpty() ? "no payable reward was allocated" : caps) + "." + history);
-            case FAILED -> ArenaMessages.error(context + "Payment failed; no confirmed payout. Ask an administrator to check it." + history);
-            case UNCERTAIN -> ArenaMessages.warning(context + "Payment outcome is unconfirmed. Ask an administrator to verify it." + history);
-            case VOID -> ArenaMessages.warning(context + "Reward $0; payment was voided after administrator review." + history);
+            case CONFIRMED -> ArenaMessages.success(context + "Paid $" + amount + "."
+                    + (hasReason(settlement.capsApplied(), "CAP_RECHECK_AT_PAYMENT") ? " Your reward limit changed before payment." : ""));
+            case PENDING, PROCESSING -> ArenaMessages.info(context + "Your reward: $" + amount + ". Payment queued."
+                    + (caps.isEmpty() ? "" : " Reward reduced: " + caps + "."));
+            case WITHHELD -> ArenaMessages.warning(context + "No reward this match: "
+                    + (caps.isEmpty() ? "there was no money to pay out" : caps) + ".");
+            case FAILED -> ArenaMessages.error(context + "Your payment failed. Ask an admin to check /ma history.");
+            case UNCERTAIN -> ArenaMessages.warning(context + "We couldn't confirm your payment. Ask an admin to check /ma history.");
+            case VOID -> ArenaMessages.warning(context + "An admin cancelled this payout.");
         };
     }
 
@@ -108,24 +108,28 @@ final class SettlementNotifier {
         return status != null && status != Settlement.Status.PENDING && status != Settlement.Status.PROCESSING;
     }
 
+    private static boolean hasReason(String codes, String reason) {
+        return codes != null && Arrays.stream(codes.split(",")).map(String::strip).anyMatch(reason::equals);
+    }
+
     private static String reasons(String codes, EconomySettings policy) {
         if (codes == null || codes.isBlank()) return "";
         return String.join("; ", Arrays.stream(codes.split(",")).map(String::strip).filter(code -> !code.isEmpty()).map(code -> switch (code) {
             case "CANCELLED" -> "the match was cancelled";
             case "PAYOUTS_DISABLED" -> "rewards were disabled";
-            case "MINIMUM_WAVE" -> policy == null ? "the minimum completed-wave requirement was not reached"
-                    : "at least " + policy.minimumRewardWave() + " completed " + (policy.minimumRewardWave() == 1 ? "wave is" : "waves are") + " required";
-            case "ZERO_KILLS" -> "no credited kills in the match";
-            case "MINIMUM_PARTICIPATION" -> policy == null ? "minimum participation time was not reached"
-                    : "at least " + policy.minimumParticipationSeconds() + " seconds of participation are required";
-            case "NO_KILLS" -> "you had no credited kills";
-            case "REWARD_COOLDOWN" -> "your reward cooldown was active";
-            case "DAILY_CAP" -> "your daily reward limit applied";
-            case "PLAYER_SESSION_CAP" -> "your per-match reward limit applied";
-            case "SESSION_POT_CAP" -> "the match reward limit applied";
-            case "SHORT_SESSION_REDUCTION" -> "the short-match reduction applied";
-            case "CAP_RECHECK_AT_PAYMENT" -> "reward limits were reapplied before payment";
-            default -> "an eligibility or reward limit applied";
+            case "MINIMUM_WAVE" -> policy == null ? "your team didn't finish enough waves"
+                    : "your team needed to finish " + policy.minimumRewardWave() + (policy.minimumRewardWave() == 1 ? " wave" : " waves");
+            case "ZERO_KILLS" -> "there were no kills in this match";
+            case "MINIMUM_PARTICIPATION" -> policy == null ? "you didn't play long enough"
+                    : "you needed to play for at least " + policy.minimumParticipationSeconds() + " seconds";
+            case "NO_KILLS" -> "you didn't get a kill";
+            case "REWARD_COOLDOWN" -> "your reward cooldown hadn't ended";
+            case "DAILY_CAP" -> "you reached your daily reward limit";
+            case "PLAYER_SESSION_CAP" -> "you reached the reward limit for one match";
+            case "SESSION_POT_CAP" -> "the prize pot reached its limit";
+            case "SHORT_SESSION_REDUCTION" -> "short matches pay less";
+            case "CAP_RECHECK_AT_PAYMENT" -> "your reward limit changed before payment";
+            default -> "a reward rule or limit applied";
         }).distinct().toList());
     }
 

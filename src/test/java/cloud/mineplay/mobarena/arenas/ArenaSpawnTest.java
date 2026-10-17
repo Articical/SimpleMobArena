@@ -303,21 +303,48 @@ class ArenaSpawnTest {
         long seconds = contribution.participationSeconds();
         String time = String.format(java.util.Locale.ROOT, "%dm %02ds", seconds / 60, seconds % 60);
         List<String> personal = messages();
-        assertEquals(4, personal.size(), "Elimination must send one personal summary, even when invoked twice.");
+        assertEquals(2, personal.size(), "Elimination must send one personal summary, even when invoked twice.");
         assertTrue(personal.stream().anyMatch(message -> message.contains("1 kills") && message.contains("37.5 damage") && message.contains(time)));
         assertTrue(personal.stream().anyMatch(message -> message.contains("Waves completed: 1")));
-        assertTrue(personal.stream().anyMatch(message -> message.contains("100.00") && message.contains("not paid yet")));
-        assertTrue(personal.stream().anyMatch(message -> message.contains("Calculating your final reward")));
+        assertFalse(personal.stream().anyMatch(message -> message.contains("Estimated share")));
+        assertFalse(personal.stream().anyMatch(message -> message.contains("Calculating")));
 
         org.mockito.InOrder delivery = inOrder(player, manager, equipment);
         delivery.verify(player).showTitle(any(Title.class));
-        delivery.verify(player, times(4)).sendMessage(any(Component.class));
+        delivery.verify(player, times(2)).sendMessage(any(Component.class));
         delivery.verify(manager).release(playerId);
         delivery.verify(equipment).restore(eq(player), eq(arena.definition().exit), any());
         verify(manager, times(1)).release(playerId);
         verify(equipment, times(1)).restore(eq(player), eq(arena.definition().exit), any());
         verify(player).playSound(any(Location.class), eq("minecraft:block.note_block.bass"), eq(SoundCategory.MASTER), anyFloat(), anyFloat());
         verify(player, never()).playSound(any(Location.class), eq("minecraft:entity.player.levelup"), any(SoundCategory.class), anyFloat(), anyFloat());
+    }
+
+    @Test void finalWaveShowsOneFinishAnnouncementAndPersonalStatsWithoutRewardProgressSpam() throws Exception {
+        arena.getConfiguration().set("max-waves", 1);
+        configureCountdown(0, 1, false);
+        when(economy.waveReward(1, 1)).thenReturn(new BigDecimal("100.00"));
+        when(economy.capPot(any(BigDecimal.class))).thenAnswer(call -> call.getArgument(0));
+        beginFirstWave();
+        ageMatchBySeconds(125);
+        arena.damage(playerId, 37.5);
+        clearInvocations(player, manager, equipment, economy);
+
+        addedToWorld.set(false);
+        arena.mobDeath(mob, player);
+
+        assertEquals(GameState.WAITING, arena.getArenaState());
+        List<String> feedback = messages();
+        assertEquals(3, feedback.size());
+        assertEquals(1, feedback.stream().filter(message -> message.contains("finished with 1 wave cleared")).count());
+        assertEquals(1, feedback.stream().filter(message -> message.contains("Finished ") && message.contains("1 kills")
+                && message.contains("37.5 damage")).count());
+        assertTrue(feedback.stream().anyMatch(message -> message.contains("Waves completed: 1")));
+        assertFalse(feedback.stream().anyMatch(message -> message.contains("No rewards yet") || message.contains("Prize pot")
+                || message.contains("All waves completed") || message.contains("Calculating")));
+        verify(economy, times(1)).finish(any(SessionResult.class));
+        verify(equipment).restore(eq(player), eq(arena.definition().exit), any());
+        verify(player, times(1)).playSound(any(Location.class), eq("minecraft:entity.player.levelup"), any(SoundCategory.class), anyFloat(), anyFloat());
     }
 
     @Test void multiplayerEliminationSummarizesDepartingPlayerAndAnnouncesToSurvivor() {
@@ -349,9 +376,9 @@ class ArenaSpawnTest {
         verify(player, times(1)).showTitle(any(Title.class));
         verify(survivor, never()).showTitle(any(Title.class));
         List<String> personal = messages();
-        assertEquals(4, personal.size());
+        assertEquals(2, personal.size());
         assertTrue(personal.stream().anyMatch(message -> message.contains("12.5 damage")));
-        assertTrue(personal.stream().anyMatch(message -> message.contains("The match continues")));
+        assertTrue(personal.stream().anyMatch(message -> message.contains("Your reward is worked out when the match ends")));
         ArgumentCaptor<Component> announcements = ArgumentCaptor.forClass(Component.class);
         verify(survivor, times(1)).sendMessage(announcements.capture());
         assertTrue(plain(announcements.getValue()).contains("ArenaPlayer was eliminated"));
@@ -394,15 +421,15 @@ class ArenaSpawnTest {
         when(economy.capPot(any(BigDecimal.class))).thenAnswer(call -> call.getArgument(0));
         arena.reserve();
         arena.joined(player);
-        assertTrue(messages().stream().anyMatch(message -> message.contains("3 completed waves as a team")
-            && message.contains("60s played") && message.contains("Paid after the match ends")));
+        assertTrue(messages().stream().anyMatch(message -> message.contains("your team needs to finish 3 waves")
+            && message.contains("60s played") && message.contains("Rewards are paid after the match")));
         arena.tick(1);
         addedToWorld.set(false);
         arena.mobDeath(mob, player);
 
         assertEquals(GameState.INTERMISSION, arena.getArenaState());
-        assertTrue(messages().stream().anyMatch(message -> message.contains("Reward waves: 1/3 completed")
-            && message.contains("not payable yet") && message.contains("60s played")));
+        assertTrue(messages().stream().anyMatch(message -> message.contains("No rewards yet: 1/3 waves cleared")
+            && message.contains("60s played")));
         verify(economy, never()).finish(any());
     }
 
@@ -568,7 +595,7 @@ class ArenaSpawnTest {
         tickAt(47);
         arena.eliminate(second, "left the match");
         assertEquals(GameState.WAITING, arena.getArenaState());
-        assertEquals(1, sent(player).stream().filter(message -> message.contains("Countdown paused")).count());
+        assertEquals(1, sent(player).stream().filter(message -> message.contains("Waiting for players in")).count());
         assertEquals(1, titles(player).stream().filter("COUNTDOWN PAUSED"::equals).count());
         assertEquals(List.of(5, 3), countdownNotices(second));
         verify(second, times(1)).clearTitle();
@@ -985,7 +1012,7 @@ class ArenaSpawnTest {
 
     private static void assertNoPrivateCountdownFor(Player observer) {
         verify(observer, never()).showTitle(any(Title.class));
-        assertTrue(sent(observer).stream().noneMatch(message -> message.contains("starts in") || message.contains("Countdown paused")));
+        assertTrue(sent(observer).stream().noneMatch(message -> message.contains("starts in") || message.contains("Waiting for players in")));
     }
 
     @SuppressWarnings("unchecked")

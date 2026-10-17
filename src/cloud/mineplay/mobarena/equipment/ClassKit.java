@@ -12,13 +12,14 @@ import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 
 import java.io.File;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-record ClassKit(String id, ItemStack[] inventory, ItemStack[] armor, ItemStack offhand,
+record ClassKit(ClassChoice choice, ItemStack[] inventory, ItemStack[] armor, ItemStack offhand,
                 List<PotionEffect> effects) {
     static Map<String, ClassKit> load(File file) {
         YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file);
@@ -31,6 +32,18 @@ record ClassKit(String id, ItemStack[] inventory, ItemStack[] armor, ItemStack o
             }
             ConfigurationSection section = classes.getConfigurationSection(id);
             if (section == null) throw new IllegalArgumentException("Invalid class section " + id);
+            long requiredKills = requiredKills(section);
+            String displayName = section.getString("display-name", id);
+            if (displayName.isBlank() || displayName.length() > 64 || displayName.chars().anyMatch(Character::isISOControl)) {
+                throw new IllegalArgumentException("Class display-name must contain 1-64 visible characters: " + id);
+            }
+            Material icon = Material.IRON_SWORD;
+            if (section.contains("icon")) {
+                icon = Material.matchMaterial(section.getString("icon", ""));
+                if (icon == null || icon.isAir() || !icon.isItem()) {
+                    throw new IllegalArgumentException("Class icon must be an item material: " + id);
+                }
+            }
             ItemStack[] inventory = new ItemStack[36];
             ConfigurationSection slots = section.getConfigurationSection("items");
             if (slots != null) {
@@ -59,12 +72,33 @@ record ClassKit(String id, ItemStack[] inventory, ItemStack[] armor, ItemStack o
                 }
             }
             String normalized = id.toLowerCase(Locale.ROOT);
-            if (kits.put(normalized, new ClassKit(normalized, inventory, armor,
+            if (kits.put(normalized, new ClassKit(new ClassChoice(normalized, displayName, icon, requiredKills), inventory, armor,
                     item(section.getConfigurationSection("offhand")), List.copyOf(effects))) != null) {
                 throw new IllegalArgumentException("Duplicate class id: " + id);
             }
         }
         return Map.copyOf(kits);
+    }
+
+    static long requiredKills(ConfigurationSection section) {
+        Object value = section.get("required-kills");
+        // Old configurations remain open until the owner adds a threshold.
+        if (value == null) return 0;
+        try {
+            long result;
+            if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+                result = ((Number) value).longValue();
+            } else if (value instanceof BigInteger integer) {
+                result = integer.longValueExact();
+            } else if (value instanceof String text && text.matches("[0-9]+")) {
+                result = Long.parseLong(text);
+            } else throw new IllegalArgumentException();
+            if (result < 0) throw new IllegalArgumentException();
+            return result;
+        } catch (IllegalArgumentException | ArithmeticException invalid) {
+            throw new IllegalArgumentException("required-kills must be a whole number from 0 to " + Long.MAX_VALUE
+                    + " at " + section.getCurrentPath());
+        }
     }
 
     private static ItemStack item(ConfigurationSection section) {

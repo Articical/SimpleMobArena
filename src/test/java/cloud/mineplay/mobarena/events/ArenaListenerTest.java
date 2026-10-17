@@ -317,6 +317,9 @@ class ArenaListenerTest {
             PlayerCommandPreprocessEvent leave = new PlayerCommandPreprocessEvent(player,"/ma leave",Set.of());
             listener.commands(leave);
             assertFalse(leave.isCancelled());
+            PlayerCommandPreprocessEvent classes = new PlayerCommandPreprocessEvent(player,"/ma classes",Set.of());
+            listener.commands(classes);
+            assertFalse(classes.isCancelled());
             PlayerCommandPreprocessEvent admin = new PlayerCommandPreprocessEvent(player,"/ma admin stop spawn",Set.of());
             listener.commands(admin);
             assertTrue(admin.isCancelled());

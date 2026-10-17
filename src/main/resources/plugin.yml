@@ -2,18 +2,18 @@ name: SimpleMobArena
 version: '${version}'
 main: cloud.mineplay.mobarena.SimpleMobArena
 api-version: '26.3'
-description: Cooperative physical arenas with recoverable equipment and audited Vault rewards.
+description: Fight waves of mobs, unlock classes and earn rewards with your team.
 authors: [Mineplay]
 website: https://github.com/Articical/SimpleMobArena
 softdepend: [Vault, Essentials, WorldGuard, PlaceholderAPI, Citizens]
 commands:
   mobarena:
-    description: Open MobArena or manage participation.
+    description: Open the arena menu, view results or join a match.
     aliases: [ma]
-    usage: /<command> [join|leave|list|info|stats|history|match|top|admin]
+    usage: /<command> [join|leave|list|info|classes|stats|history|match|top|admin]
 permissions:
   mobarena.use:
-    description: Open the arena menu and view arena information.
+    description: Open the arena menu, class list and arena details.
     default: true
   mobarena.join:
     description: Join arenas and select equipment.

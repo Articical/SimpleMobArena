@@ -7,6 +7,7 @@ import cloud.mineplay.mobarena.storage.WebsiteExportStore;
 import cloud.mineplay.mobarena.website.WebsiteExportSettings;
 import cloud.mineplay.mobarena.website.WebsitePublisher;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -32,6 +33,9 @@ public final class EconomyService implements AutoCloseable {
     private final VaultGateway gateway;
     private final StoreFactory storeFactory;
     private final SettlementNotifier notifications;
+    private final Clock paymentClock;
+    private final PaymentDelay paymentDelay = new PaymentDelay();
+    private volatile int paymentDelaySeconds = 3;
     private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "SimpleMobArena-ledger");
         thread.setDaemon(true);
@@ -70,12 +74,18 @@ public final class EconomyService implements AutoCloseable {
 
     EconomyService(JavaPlugin plugin, VaultGateway gateway, StoreFactory storeFactory,
                    WebsiteExportSettings suppliedWebsiteSettings, PublisherFactory publisherFactory) {
+        this(plugin, gateway, storeFactory, suppliedWebsiteSettings, publisherFactory, Clock.systemUTC());
+    }
+
+    EconomyService(JavaPlugin plugin, VaultGateway gateway, StoreFactory storeFactory,
+                   WebsiteExportSettings suppliedWebsiteSettings, PublisherFactory publisherFactory, Clock paymentClock) {
         this.plugin = plugin;
         logger = plugin.getLogger();
         scheduler = plugin.getServer().getScheduler();
         this.gateway = gateway;
         this.storeFactory = storeFactory;
         this.publisherFactory = publisherFactory;
+        this.paymentClock = paymentClock;
         notifications = new SettlementNotifier(plugin, () -> closing);
         database = DatabaseSettings.load(plugin.getConfig().getConfigurationSection("storage"), plugin.getDataFolder().toPath());
         outbox = new SettlementOutbox(plugin.getDataFolder().toPath().resolve("settlement-outbox"));
@@ -100,7 +110,10 @@ public final class EconomyService implements AutoCloseable {
 
     public boolean reload(ConfigurationSection section) {
         try {
-            settings = EconomySettings.load(section);
+            EconomySettings loaded = EconomySettings.load(section);
+            int delay = PaymentDelay.seconds(section);
+            settings = loaded;
+            paymentDelaySeconds = delay;
             configurationError = null;
             return true;
         } catch (IllegalArgumentException exception) {
@@ -272,9 +285,12 @@ public final class EconomyService implements AutoCloseable {
         if (closing || configurationError != null || ledgerError != null || !settings.enabled() || !ready.isDone()
                 || !gateway.available(settings.scale()) || !pumping.compareAndSet(false, true)) return;
         EconomySettings paymentSettings = settings;
+        int delaySeconds = paymentDelaySeconds;
         submit(store -> {
-            try { return SettlementPayments.claimNext(store, paymentSettings, true, Instant.now(),
-                    id -> notifications.payment(store, id, true)); }
+            Instant now = paymentClock.instant();
+            try { return SettlementPayments.claimNext(store, paymentSettings, true, now,
+                    id -> { paymentDelay.forget(id); notifications.payment(store, id, true); },
+                    payment -> paymentDelay.ready(payment.settlementId(), now, delaySeconds)); }
             catch (Exception exception) { throw new CompletionException(exception); }
         }).whenComplete((payment, error) -> {
             if (error != null) { pumping.set(false); failLedger(error); return; }

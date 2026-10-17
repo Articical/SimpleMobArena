@@ -102,9 +102,9 @@ class ArenaAnnouncementsTest {
         ArgumentCaptor<Component> messages = ArgumentCaptor.forClass(Component.class);
         verify(outsider, times(3)).sendMessage(messages.capture());
         List<String> lines = messages.getAllValues().stream().map(ArenaAnnouncementsTest::plain).toList();
-        assertTrue(lines.get(0).contains("Joining is now closed"));
-        assertTrue(lines.get(1).contains("7 completed waves"));
-        assertTrue(lines.get(2).contains("cancelled after 2 completed waves"));
+        assertTrue(lines.get(0).contains("Join the next match"));
+        assertTrue(lines.get(1).contains("7 waves cleared"));
+        assertTrue(lines.get(2).contains("cancelled after 2 waves cleared"));
         assertTrue(lines.stream().noneMatch(line -> line.contains("paid") || line.contains("reward") || line.contains("$")));
         messages.getAllValues().forEach(message -> assertTrue(clicks(message).isEmpty()));
         verify(outsider, never()).showTitle(any(Title.class));
@@ -205,7 +205,7 @@ class ArenaAnnouncementsTest {
         Title title = capturedTitle(joining);
         assertEquals("FIGHT!", plain(title.title()));
         assertEquals(NamedTextColor.GREEN, title.title().color());
-        assertTrue(plain(captured(outsider)).contains("Joining is now closed"));
+        assertTrue(plain(captured(outsider)).contains("Join the next match"));
         verify(outsider, never()).showTitle(any(Title.class));
     }
 
@@ -257,7 +257,7 @@ class ArenaAnnouncementsTest {
 
         verify(teammate).showTitle(any(Title.class));
         verify(teammate).clearTitle();
-        assertTrue(plain(captured(teammate)).contains("cancelled after 0 completed waves"));
+        assertTrue(plain(captured(teammate)).contains("cancelled after 0 waves cleared"));
         verify(joining).sendMessage(any(Component.class));
     }
 

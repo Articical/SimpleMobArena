@@ -13,18 +13,16 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 
 class MatchMessagesTest {
-    @Test void eliminationShowsPersonalContributionAndUnpaidEstimateWhileOthersContinue() {
+    @Test void eliminationShowsPersonalStatsWithoutAnEstimateWhileOthersContinue() {
         var result = summary("Castle", true, true, 125, new BigDecimal("123.459"));
         List<String> lines = MatchMessages.elimination(result).stream().map(MatchMessagesTest::plain).toList();
 
-        assertEquals(4, lines.size());
+        assertEquals(2, lines.size());
         assertTrue(lines.get(0).contains("Eliminated in Castle"));
         assertTrue(lines.get(0).contains("7 kills · 182.5 damage · 2m 05s"));
         assertTrue(lines.get(1).contains("Wave reached: 5 · Waves completed: 4"));
-        assertTrue(lines.get(2).contains("Estimated share: $123.45"));
-        assertTrue(lines.get(2).contains("before eligibility/caps; not paid yet"));
-        assertTrue(lines.get(3).contains("match continues"));
-        assertTrue(lines.get(3).contains("/ma history"));
+        assertTrue(lines.get(1).contains("Your reward is worked out when the match ends"));
+        assertTrue(lines.stream().noneMatch(line -> line.contains("$") || line.contains("Paid ")));
         assertEquals("ELIMINATED", plain(MatchMessages.eliminationTitle(result).title()));
         assertEquals(NamedTextColor.RED, MatchMessages.eliminationTitle(result).title().color());
     }
@@ -33,12 +31,11 @@ class MatchMessagesTest {
         var result = summary("Castle", false, false, 3601, BigDecimal.ZERO);
         List<String> lines = MatchMessages.elimination(result).stream().map(MatchMessagesTest::plain).toList();
 
+        assertEquals(2, lines.size());
         assertTrue(lines.get(0).contains("Left Castle"));
         assertTrue(lines.get(0).contains("1h 00m 01s"));
-        assertTrue(lines.get(2).contains("Estimated share: $0.00"));
-        assertTrue(lines.get(2).contains("not paid yet"));
-        assertTrue(lines.get(3).contains("Calculating your final reward"));
-        assertFalse(lines.get(3).contains("match continues"));
+        assertTrue(lines.get(1).contains("Wave reached: 5 · Waves completed: 4"));
+        assertTrue(lines.stream().noneMatch(line -> line.contains("reward") || line.contains("$") || line.contains("/ma history")));
         assertEquals("LEFT ARENA", plain(MatchMessages.eliminationTitle(result).title()));
         assertEquals(NamedTextColor.YELLOW, MatchMessages.eliminationTitle(result).title().color());
     }
@@ -56,15 +53,15 @@ class MatchMessagesTest {
     @Test void rewardRequirementsExplainTeamWavesPersonalTimeAndProvisionalPot() {
         var settings = EconomySettings.defaults();
         String joining = plain(MatchMessages.rewardRequirements(settings));
-        assertTrue(joining.contains("3 completed waves as a team"));
-        assertTrue(joining.contains("60s played and credited kills"));
-        assertTrue(joining.contains("Paid after the match ends; cooldowns and caps apply"));
+        assertTrue(joining.contains("your team needs to finish 3 waves"));
+        assertTrue(joining.contains("60s played and at least one kill"));
+        assertTrue(joining.contains("Rewards are paid after the match; cooldowns and limits apply"));
         String firstWave = plain(MatchMessages.rewardProgress(settings,1));
-        assertTrue(firstWave.contains("1/3 completed"));
-        assertTrue(firstWave.contains("pot is not payable yet"));
+        assertTrue(firstWave.contains("1/3 waves cleared"));
+        assertTrue(firstWave.contains("No rewards yet"));
         String thirdWave = plain(MatchMessages.rewardProgress(settings,3));
-        assertTrue(thirdWave.contains("Reward wave minimum met"));
-        assertTrue(thirdWave.contains("60s participation minimum, kills, cooldown and caps still apply"));
+        assertTrue(thirdWave.contains("Enough waves cleared for rewards"));
+        assertTrue(thirdWave.contains("60s played and at least one kill; cooldowns and limits apply"));
     }
 
     private static MatchMessages.ExitSummary summary(String arena, boolean eliminated, boolean continues, long seconds, BigDecimal estimate) {

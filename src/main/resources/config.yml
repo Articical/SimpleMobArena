@@ -170,6 +170,9 @@ waves:
           - {material: IRON_AXE, chance: 1.0}
 
 economy:
+  # Brief pause before sending rewards. 0 disables the pause; maximum 30 seconds.
+  # Payments stay durably queued during the pause, including across a restart.
+  payment-delay-seconds: 3
   enabled: true # false suspends payments; gameplay remains available.
   provider: VAULT
   reward:

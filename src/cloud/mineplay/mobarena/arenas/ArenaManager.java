@@ -14,7 +14,7 @@ public final class ArenaManager {
     private final SimpleMobArena plugin;
     private final Map<String,Arena> arenas = new LinkedHashMap<>();
     private final Map<UUID,Arena> membership = new HashMap<>();
-    private final Set<UUID> preparing = new HashSet<>();
+    private final Map<UUID,UUID> preparing = new HashMap<>();
     private final cloud.mineplay.mobarena.storage.DatabaseSettings storage;
     public ArenaManager(SimpleMobArena plugin) {
         this.plugin = plugin;
@@ -70,14 +70,16 @@ public final class ArenaManager {
         if (membership.containsKey(player.getUniqueId()) || plugin.getEquipmentService().hasSnapshot(player.getUniqueId()))
             throw new IllegalStateException("You already joined or have equipment awaiting recovery.");
         Arena arena = required(id); arena.reserve();
-        UUID playerId = player.getUniqueId(), session = arena.getSessionId();
-        membership.put(playerId,arena); preparing.add(playerId);
+        UUID playerId = player.getUniqueId(), session = arena.getSessionId(), preparation = UUID.randomUUID();
+        membership.put(playerId,arena); preparing.put(playerId,preparation);
         plugin.getEquipmentService().prepare(player,selection,() -> {
-            boolean reserved = preparing.remove(playerId);
-            if (!reserved || membership.get(playerId) != arena || !arena.getSessionId().equals(session)
+            // A leave followed by another join may use the same player, arena and session.
+            // Only this reservation's callback may change its membership or equipment.
+            if (!preparing.remove(playerId,preparation)) return;
+            if (membership.get(playerId) != arena || !arena.getSessionId().equals(session)
                     || !player.isOnline() || Bukkit.getPlayer(playerId) != player) {
-                if (reserved) arena.releaseReservation();
-                release(playerId); plugin.getEquipmentService().restore(player,arena.definition().exit,() -> {}); return;
+                arena.releaseReservation();
+                membership.remove(playerId,arena); plugin.getEquipmentService().restore(player,arena.definition().exit,() -> {}); return;
             }
             try { arena.joined(player); }
             catch (RuntimeException e) {
@@ -85,14 +87,15 @@ public final class ArenaManager {
                 player.sendMessage(ArenaMessages.error(e.getMessage()));
             }
         },message -> {
-            if (preparing.remove(playerId)) arena.releaseReservation();
-            release(playerId); player.sendMessage(ArenaMessages.error(message));
+            if (!preparing.remove(playerId,preparation)) return;
+            arena.releaseReservation();
+            membership.remove(playerId,arena); player.sendMessage(ArenaMessages.error(message));
         });
     }
     public void leave(Player player) {
         Arena arena = membership.get(player.getUniqueId());
         if (arena == null) throw new IllegalStateException("You are not in an arena.");
-        if (preparing.remove(player.getUniqueId())) {
+        if (preparing.remove(player.getUniqueId()) != null) {
             arena.releaseReservation(); membership.remove(player.getUniqueId());
             // Request recovery now; EquipmentService waits for the durable original and
             // skips kit application when preparation completes after a leave/disconnect.
@@ -102,10 +105,17 @@ public final class ArenaManager {
     public void disconnected(Player player) {
         if (membership.containsKey(player.getUniqueId())) leave(player);
     }
-    public void release(UUID id) { membership.remove(id); }
+    public void release(UUID id) {
+        Arena arena = membership.remove(id);
+        if (preparing.remove(id) != null) {
+            if (arena != null) arena.releaseReservation();
+            plugin.getEquipmentService().cancelPreparation(id);
+        }
+    }
     public void cancelReservations(Arena arena) {
-        for (UUID id : new HashSet<>(preparing)) if (membership.get(id) == arena) {
+        for (UUID id : new HashSet<>(preparing.keySet())) if (membership.get(id) == arena) {
             preparing.remove(id); membership.remove(id); arena.releaseReservation();
+            plugin.getEquipmentService().cancelPreparation(id);
             Player player = Bukkit.getPlayer(id);
             if (player != null) plugin.getEquipmentService().restore(player,null,() -> {});
         }

@@ -50,6 +50,7 @@ class EconomyServiceSqliteTest {
         when(plugin.isEnabled()).thenReturn(true);
         YamlConfiguration config = new YamlConfiguration();
         config.createSection("economy"); // Production defaults: three completed waves and 60 seconds.
+        config.set("economy.payment-delay-seconds", 0);
         when(plugin.getConfig()).thenReturn(config);
         when(server.getScheduler()).thenReturn(scheduler);
         when(server.getPlayer(playerId)).thenReturn(player);
@@ -81,8 +82,8 @@ class EconomyServiceSqliteTest {
         verify(player, never()).sendMessage(any(Component.class));
         nextTask().run();
 
-        assertTrue(messages().getFirst().contains("Reward $0; no payment: at least 3 completed waves are required"));
-        assertTrue(messages().getFirst().contains("/ma history"));
+        assertTrue(messages().getFirst().contains("No reward this match: your team needed to finish 3 waves"));
+        assertFalse(messages().getFirst().contains("/ma history"));
         timers.getFirst().run();
         service.stats(playerId).get(5, TimeUnit.SECONDS);
         assertTrue(scheduled.isEmpty());
@@ -96,7 +97,7 @@ class EconomyServiceSqliteTest {
         service.finish(result).get(5, TimeUnit.SECONDS);
         assertEquals(Settlement.Status.PENDING, service.payouts(result.sessionId()).get(5, TimeUnit.SECONDS).getFirst().status());
         nextTask().run();
-        assertTrue(messages().getFirst().contains("Reward $600.00 awaiting payment"));
+        assertTrue(messages().getFirst().contains("Your reward: $600.00. Payment queued"));
         assertFalse(messages().getFirst().contains("Paid $"));
 
         timers.getFirst().run();
@@ -111,7 +112,7 @@ class EconomyServiceSqliteTest {
         assertEquals(1, messages().size(), "The ledger worker cannot directly send the receipt");
         nextTask().run();
 
-        assertTrue(messages().getLast().contains("roof #" + result.sessionId().toString().substring(0, 8) + ": Paid $600.00."));
+        assertTrue(messages().getLast().contains("roof: Paid $600.00."));
         verify(gateway, times(1)).deposit(eq(playerId), eq(new BigDecimal("600.00")), eq(2));
         assertEquals(new BigDecimal("600.00"), service.history(playerId, 1).get(5, TimeUnit.SECONDS).getFirst().confirmedAmount());
     }

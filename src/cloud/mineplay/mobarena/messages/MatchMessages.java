@@ -7,7 +7,6 @@ import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.title.Title;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
@@ -18,19 +17,20 @@ public final class MatchMessages {
     private MatchMessages() {}
 
     public static Component rewardRequirements(EconomySettings settings) {
-        if (!settings.enabled()) return ArenaMessages.warning("Rewards are currently disabled for this match.");
-        return ArenaMessages.info("Rewards require " + settings.minimumRewardWave() + " completed waves as a team, "
-            + settings.minimumParticipationSeconds() + "s played and credited kills. Paid after the match ends; cooldowns and caps apply.");
+        if (!settings.enabled()) return ArenaMessages.warning("Rewards are turned off for this match.");
+        return ArenaMessages.info("To earn a reward, your team needs to finish " + waves(settings.minimumRewardWave()) + ". "
+            + "You need " + settings.minimumParticipationSeconds() + "s played and at least one kill. "
+            + "Rewards are paid after the match; cooldowns and limits apply.");
     }
 
     public static Component rewardProgress(EconomySettings settings, int completedWaves) {
-        if (!settings.enabled()) return ArenaMessages.warning("Rewards are currently disabled for this match.");
+        if (!settings.enabled()) return ArenaMessages.warning("Rewards are turned off for this match.");
         if (completedWaves < settings.minimumRewardWave()) {
-            return ArenaMessages.warning("Reward waves: " + completedWaves + "/" + settings.minimumRewardWave()
-                + " completed. The pot is not payable yet; you also need " + settings.minimumParticipationSeconds() + "s played and credited kills.");
+            return ArenaMessages.warning("No rewards yet: " + completedWaves + "/" + settings.minimumRewardWave()
+                + " waves cleared. You also need " + settings.minimumParticipationSeconds() + "s played and at least one kill.");
         }
-        return ArenaMessages.info("Reward wave minimum met. Your " + settings.minimumParticipationSeconds()
-            + "s participation minimum, kills, cooldown and caps still apply.");
+        return ArenaMessages.info("Enough waves cleared for rewards. You still need " + settings.minimumParticipationSeconds()
+            + "s played and at least one kill; cooldowns and limits apply.");
     }
 
     public record ExitSummary(String arenaName, UUID sessionId, String reason, boolean eliminated,
@@ -39,7 +39,15 @@ public final class MatchMessages {
 
     public static List<Component> elimination(ExitSummary result) {
         NamedTextColor outcomeColour = result.eliminated() ? NamedTextColor.RED : NamedTextColor.YELLOW;
-        Component personal = Component.text(result.eliminated() ? "Eliminated in " : "Left ", outcomeColour, TextDecoration.BOLD)
+        return personalStats(result, result.eliminated() ? "Eliminated in " : "Left ", outcomeColour);
+    }
+
+    public static List<Component> completed(ExitSummary result) {
+        return personalStats(result, "Finished ", NamedTextColor.GREEN);
+    }
+
+    private static List<Component> personalStats(ExitSummary result, String heading, NamedTextColor outcomeColour) {
+        Component personal = Component.text(heading, outcomeColour, TextDecoration.BOLD)
             .append(Component.text(result.arenaName(), outcomeColour))
             .append(Component.text(" · ", NamedTextColor.DARK_GRAY).decoration(TextDecoration.BOLD, false))
             .append(Component.text(result.kills() + " kills · " + damage(result.damage()) + " damage · " + duration(result.seconds()), NamedTextColor.GRAY)
@@ -48,14 +56,10 @@ public final class MatchMessages {
             .append(Component.text(result.waveReached(), NamedTextColor.GOLD))
             .append(Component.text(" · Waves completed: ", NamedTextColor.GRAY))
             .append(Component.text(result.completedWaves(), NamedTextColor.GOLD));
-        Component estimate = Component.text("Estimated share: ", NamedTextColor.GRAY)
-            .append(Component.text(money(result.estimatedGross()), NamedTextColor.YELLOW, TextDecoration.BOLD))
-            .append(Component.text(" · before eligibility/caps; not paid yet", NamedTextColor.GRAY));
-        String pending = result.matchContinues()
-            ? "The match continues. Your final reward is calculated when it ends; check /ma history."
-            : "Calculating your final reward. Your payout result will follow; check /ma history.";
-        return List.of(ArenaMessages.info(personal), ArenaMessages.info(progress),
-            ArenaMessages.info(estimate), ArenaMessages.info(pending));
+        if (result.matchContinues()) {
+            progress = progress.append(Component.text(" · Your reward is worked out when the match ends.", NamedTextColor.GRAY));
+        }
+        return List.of(ArenaMessages.info(personal), ArenaMessages.info(progress));
     }
 
     public static Title eliminationTitle(ExitSummary result) {
@@ -67,7 +71,7 @@ public final class MatchMessages {
         return Title.title(title, subtitle, Title.Times.times(Duration.ofMillis(250), Duration.ofSeconds(3), Duration.ofMillis(500)));
     }
 
-    private static String money(BigDecimal value) { return "$" + value.setScale(2, RoundingMode.DOWN).toPlainString(); }
+    private static String waves(int count) { return count + (count == 1 ? " wave" : " waves"); }
     private static String damage(double value) { return String.format(Locale.ROOT, "%.1f", value); }
     private static String duration(long seconds) {
         long total = Math.max(0, seconds);

@@ -53,6 +53,7 @@ class EconomyServiceWebsiteTest {
         when(plugin.isEnabled()).thenReturn(true);
         var configuration = new YamlConfiguration();
         configuration.createSection("economy");
+        configuration.set("economy.payment-delay-seconds", 0);
         when(plugin.getConfig()).thenReturn(configuration);
         when(server.getScheduler()).thenReturn(scheduler);
         when(scheduler.runTaskTimer(eq(plugin), any(Runnable.class), anyLong(), anyLong())).thenAnswer(call -> {

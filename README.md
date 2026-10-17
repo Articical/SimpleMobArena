@@ -14,7 +14,7 @@ Install a Java 25 JDK, set `JAVA_HOME`, then run:
 .\gradlew.bat clean build
 ```
 
-On Linux/macOS use `sh ./gradlew clean build`. Build output is `build/libs/SimpleMobArena-1.0.6.jar`. This single JAR contains SQLite JDBC, its native libraries, MySQL Connector/J and Gson; do not deploy compiled files from the old Eclipse `bin` directory. Tests are in `src/test/java` and reports in `build/reports/tests/test/index.html`.
+On Linux/macOS use `sh ./gradlew clean build`. Build output is `build/libs/SimpleMobArena-1.0.7.jar`. This single JAR contains SQLite JDBC, its native libraries, MySQL Connector/J and Gson; do not deploy compiled files from the old Eclipse `bin` directory. Tests are in `src/test/java` and reports in `build/reports/tests/test/index.html`.
 
 The existing `src/cloud/mineplay/mobarena` source layout and the `Arena` / `ArenaManager` concepts are retained. Resources live in `src/main/resources`. SQLite and all runtime dependencies are packaged by the `jar` task; the Paper API and Vault economy are supplied by the server.
 
@@ -109,12 +109,13 @@ When PlaceholderAPI is installed, the bundled expansion registers `%simplemobare
 
 ## Playing and administration
 
-`/mobarena` is the primary command; `/ma` is its alias. Run either with no arguments to open the arena inventory menu. Left-click an arena and select personal equipment or a class. Menus show live information at the time they are opened; Refresh updates it. Estimated rewards are before eligibility/caps and are never guarantees.
+`/mobarena` is the primary command; `/ma` is its alias. Run either with no arguments to open the arena inventory menu. Left-click an arena to choose equipment, or right-click for its details. The stats, matches, leaderboard and classes buttons open their own menus. Player information commands open the same screens; console commands retain text reports. Menus have back, refresh and page controls. Statistics load in the background; closing or replacing a menu discards its pending display update.
 
 | Command | Permission | Behavior |
 | --- | --- | --- |
 | `/ma`, `/ma list`, `/ma info <arena>` | `mobarena.use` | Menu and arena information |
-| `/ma join <arena> [personal\|class]` | `mobarena.join` | Join; defaults to personal when available, otherwise opens class selection |
+| `/ma join <arena> [personal\|class]` | `mobarena.join` | Open equipment selection, or join with an explicit unlocked choice |
+| `/ma classes` | `mobarena.use` | Class unlocks and progress toward the next kill requirement |
 | `/ma leave` | None | Leave safely, retaining earned kill contribution |
 | `/ma stats` | `mobarena.stats` | Personal statistics |
 | `/ma stats <cached name\|UUID>` | `mobarena.stats.others` | Another player's statistics |
@@ -181,9 +182,28 @@ Only registered current-session mobs count. Arena mobs drop no items or XP, so c
 
 PERSONAL retains owned gear with normal combat consumption and wear by default. `equipment.personal.preserve-durability` prevents wear; `restore-consumables` refunds supported arrows, food and potions on exit while removing newly created empty containers. CLASS replaces equipment only after a durable original snapshot exists. BOTH offers either choice. `classes.yml` supplies Knight, Archer, Tank and Berserker and supports materials, stack amounts, enchantments, armor, offhand and potion effects.
 
+Classes can require a saved all-time arena kill count. Fresh installations use Knight **0**, Archer **100**, Tank **500** and Berserker **1,000**. Each class accepts `display-name`, an item `icon`, and a nonnegative whole-number `required-kills`. These are lifetime kills recorded from finished arena matches, including recorded contributions to cancelled matches; ordinary survival kills do not count. Current-match kills become available after the result is saved. There is no separate unlock table: changing a threshold changes who can use that class.
+
+**Upgrading an existing server:** existing `classes.yml` files are preserved. A class without `required-kills` stays available at zero kills. To enable the default progression, add the following field inside each existing class definition, alongside `display-name`, and run `/ma admin reload` while arenas are idle:
+
+```yaml
+# Merge these fields into the existing definitions; keep all kit items and effects.
+classes:
+  knight:
+    required-kills: 0
+  archer:
+    required-kills: 100
+  tank:
+    required-kills: 500
+  berserker:
+    required-kills: 1000
+```
+
+Locked classes show their requirement and the player's progress. Direct commands and menu clicks use the same unlock check before touching inventory. Positive requirements are checked asynchronously against storage; failed or timed-out checks cannot equip the class. Players can cancel a pending check with `/ma leave`. Personal equipment and zero-kill classes do not require a successful statistics lookup.
+
 Normal lethal damage is cancelled and becomes elimination. Remaining participants continue. Voluntary leavers and eliminated/disconnected players keep their recorded contribution. Item dropping, collection, containers, transfers, block edits, escape, cross-arena combat and outsider attacks are constrained to keep the physical arena isolated from SMP. Non-arena commands are blocked during participation, including alternate inventory/teleport commands. Configure `outsider-exit` using `/ma admin setoutsider` to move nonparticipants safely outside every arena. Class state is restored on exit/reconnect; a recovery failure pauses interaction and retains the saved inventory for administrator attention.
 
-Eliminated players receive a direct **ELIMINATED** title and personal chat summary, including kills, damage, wave reached, completed waves and participation time. This also works for the last/only player, after they leave the active participant set. A departing player's share remains an estimate while the match continues. Once the match ends, online participants receive the recorded payout result: awaiting payment, confirmed paid amount, or a readable reason for no payment. A successful Vault response is announced as paid only after confirmation is saved. Offline players can inspect `/ma history` and `/ma match` on return.
+Eliminated players receive an **ELIMINATED** title and two chat lines showing kills, damage, time, wave reached and completed waves. This also works for the last/only player. Players leaving an ongoing match are told their reward will be worked out at the end. Surviving players get their stats when the match finishes. Once the result is saved, online participants see their queued reward or the reason no reward was earned. A separate paid message follows only after the Vault deposit and its confirmation are saved. Routine notices omit session IDs and repeated history prompts. Offline players can inspect `/ma history` and `/ma match` on return.
 
 Waves one and two exclude ranged-capable mobs. Skeletons, strays, drowned, blazes, pillagers, witches and wither skeletons have an effective minimum unlock wave of three; configured later unlocks remain in effect. This applies to older configuration files as well, without rewriting them. Keep at least one melee mob, such as a zombie or spider, configured for wave one.
 
@@ -242,6 +262,8 @@ The default $100 pot after wave one is **not yet payable**: the team must comple
 Daily limits reset at **00:00 UTC**. Pending, processing and uncertain payments continue reserving daily capacity across days until resolved. Cooldown eligibility is measured from a previous rewarded/reserved session's finish to the next session's start. Disabled payouts, cancellations, failed starts and failed waves never create a new payable reward. The optional short-session multiplier can reduce very short runs.
 
 `economy.enabled: false` disables new reward allocations and pauses pending deposits while allowing gameplay. Missing Vault/providers pause pending payments. The payment provider must support the configured precision. Vault's deposit method requires `double`; conversion occurs only at that boundary, never in balance calculations.
+
+`economy.payment-delay-seconds` defaults to **3** (including when absent from an older config). Set a whole number from 0 to 30; 0 removes the pause. The ledger worker waits for the deadline before claiming a queued payment, without sleeping or blocking the server thread. The once-per-second payment poll and other queued payouts can add time. Pending rewards stay durable through restart; the brief pause starts afresh after restart. Reward amounts, eligibility and duplicate-payment protections are unchanged. The server thread performs only the Vault call; ledger work stays on its background worker.
 
 ## Ledger, recovery and backups
 

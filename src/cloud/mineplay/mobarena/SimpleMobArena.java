@@ -3,6 +3,7 @@ package cloud.mineplay.mobarena;
 import cloud.mineplay.mobarena.arenas.ArenaManager;
 import cloud.mineplay.mobarena.commands.CommandManager;
 import cloud.mineplay.mobarena.economy.EconomyService;
+import cloud.mineplay.mobarena.economy.PlayerStatistics;
 import cloud.mineplay.mobarena.equipment.EquipmentService;
 import cloud.mineplay.mobarena.events.ArenaListener;
 import cloud.mineplay.mobarena.messages.ArenaMessages;
@@ -34,6 +35,7 @@ public final class SimpleMobArena extends JavaPlugin {
             new org.bukkit.configuration.file.YamlConfiguration().load(new java.io.File(getDataFolder(),"config.yml"));
             equipmentService = new EquipmentService(this);
             economyService = new EconomyService(this);
+            equipmentService.setLifetimeKillsLookup(id -> economyService.stats(id).thenApply(PlayerStatistics::kills));
             economyService.reload(getConfig().getConfigurationSection("economy"));
             arenaManager = new ArenaManager(this); arenaManager.loadArenas();
             arenaListener = new ArenaListener(this);

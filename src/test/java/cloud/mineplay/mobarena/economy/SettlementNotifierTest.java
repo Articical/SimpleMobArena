@@ -98,20 +98,20 @@ class SettlementNotifierTest {
     @Test void settlementStatusesUseHonestAmountsAndHumanEligibilityReasons() {
         String withheld = plain(SettlementNotifier.message("roof", payment(Settlement.Status.WITHHELD,
                 "MINIMUM_PARTICIPATION,DAILY_CAP,REWARD_COOLDOWN")));
-        assertTrue(withheld.contains("Reward $0; no payment"));
-        assertTrue(withheld.contains("minimum participation time was not reached"));
-        assertTrue(withheld.contains("your daily reward limit applied"));
-        assertTrue(withheld.contains("your reward cooldown was active"));
+        assertTrue(withheld.contains("No reward this match"));
+        assertTrue(withheld.contains("you didn't play long enough"));
+        assertTrue(withheld.contains("you reached your daily reward limit"));
+        assertTrue(withheld.contains("your reward cooldown hadn't ended"));
         assertFalse(withheld.contains("DAILY_CAP"));
         for (Settlement.Status status : List.of(Settlement.Status.PENDING, Settlement.Status.PROCESSING)) {
             String text = plain(SettlementNotifier.message("roof", payment(status, "PLAYER_SESSION_CAP")));
-            assertTrue(text.contains("Reward $42.50 awaiting payment"));
-            assertTrue(text.contains("your per-match reward limit applied"));
+            assertTrue(text.contains("Your reward: $42.50. Payment queued"));
+            assertTrue(text.contains("you reached the reward limit for one match"));
             assertFalse(text.contains("Paid "));
         }
         for (Settlement.Status status : List.of(Settlement.Status.FAILED, Settlement.Status.UNCERTAIN)) {
             String text = plain(SettlementNotifier.message("roof", payment(status, "")));
-            assertTrue(text.contains("administrator"));
+            assertTrue(text.contains("admin"));
             assertFalse(text.contains("Paid "));
             assertTrue(text.contains("/ma history"));
         }
@@ -120,9 +120,19 @@ class SettlementNotifierTest {
     @Test void withheldMinimumsUseTheActualSettlementPolicy() {
         EconomySettings policy = RewardCalculatorTest.policy("1000", "1000", "1000", 0, 5, 90, 0, "1");
         assertTrue(plain(SettlementNotifier.message("roof", payment(Settlement.Status.WITHHELD, "MINIMUM_WAVE"), policy))
-                .contains("at least 5 completed waves are required"));
+                .contains("your team needed to finish 5 waves"));
         assertTrue(plain(SettlementNotifier.message("roof", payment(Settlement.Status.WITHHELD, "MINIMUM_PARTICIPATION"), policy))
-                .contains("at least 90 seconds of participation are required"));
+                .contains("you needed to play for at least 90 seconds"));
+    }
+
+    @Test void confirmedReceiptExplainsOnlyAnActualCapRecheckReduction() {
+        String reduced = plain(SettlementNotifier.message("roof", payment(Settlement.Status.CONFIRMED,
+                "PLAYER_SESSION_CAP, CAP_RECHECK_AT_PAYMENT")));
+        assertTrue(reduced.contains("Paid $42.50. Your reward limit changed before payment."));
+        for (String reasons : List.of("", "PLAYER_SESSION_CAP", "NOT_CAP_RECHECK_AT_PAYMENT")) {
+            String normal = plain(SettlementNotifier.message("roof", payment(Settlement.Status.CONFIRMED, reasons)));
+            assertEquals("MobArena » roof: Paid $42.50.", normal);
+        }
     }
 
     private Settlement payment(Settlement.Status status, String caps) {

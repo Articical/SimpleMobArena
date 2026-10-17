@@ -25,15 +25,19 @@ import java.util.function.Consumer;
 
 /** Command dispatch owns permission checks; arena services validate all mutations again. */
 public final class CommandManager implements CommandExecutor, TabCompleter {
-    private static final List<String> PLAYER_COMMANDS = List.of("join", "leave", "list", "info", "stats", "history", "match", "top", "admin");
+    private static final List<String> PLAYER_COMMANDS = List.of("join", "leave", "list", "info", "classes", "stats", "history", "match", "top", "admin");
     private static final List<String> ADMIN_COMMANDS = List.of("create", "delete", "setplayer", "addplayer", "setmob", "addmob", "clearspawns", "setexit", "setoutsider", "setpos1", "setpos2", "setup", "start", "stop", "forcewave", "reload", "status", "enable", "economy", "payouts", "reconcile", "npc", "website");
     private final SimpleMobArena plugin;
     private final ArenaMenu menu;
 
     public CommandManager(SimpleMobArena plugin) {
-        this.plugin = plugin;
-        this.menu = new ArenaMenu(plugin);
+        this(plugin, new ArenaMenu(plugin));
         Bukkit.getPluginManager().registerEvents(menu, plugin);
+    }
+
+    CommandManager(SimpleMobArena plugin, ArenaMenu menu) {
+        this.plugin = plugin;
+        this.menu = menu;
     }
 
     public void openMenu(Player player) { menu.open(player,0); }
@@ -44,7 +48,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
             if (args.length == 0) {
                 requirePermission(sender, "mobarena.use");
                 if (sender instanceof Player player) menu.open(player, 0);
-                else message(sender, "Commands: join, leave, list, info, stats, history, match, top, admin.");
+                else message(sender, "Commands: join, leave, list, info, classes, stats, history, match, top, admin.");
                 return true;
             }
             String sub = args[0].toLowerCase(Locale.ROOT);
@@ -63,7 +67,6 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                     requireArgs(args, 2, "/ma join <arena> [personal|class]");
                     Arena arena = requireArena(args[1]);
                     String choice = args.length > 2 ? args[2] : null;
-                    if (choice == null && plugin.getEquipmentService().availableChoices().stream().anyMatch("personal"::equalsIgnoreCase)) choice = "personal";
                     if (choice == null) menu.openEquipment(player, arena.getId());
                     else plugin.getArenaManager().join(player, arena.getId(), choice);
                 }
@@ -71,34 +74,42 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                 case "leave" -> plugin.getArenaManager().leave(requirePlayer(sender));
                 case "list" -> {
                     requirePermission(sender, "mobarena.use");
+                    if (sender instanceof Player player) { menu.open(player, 0); return true; }
                     if (plugin.getArenaManager().getArenas().isEmpty()) warning(sender, "No arenas are configured.");
                     for (Arena arena : plugin.getArenaManager().getArenas()) message(sender, arena.getId() + " - " + arena.getName() + " | " + arena.getArenaState() + " | " + arena.getPlayers().size() + "/" + arena.getMaxPlayers());
                 }
                 case "info" -> {
                     requirePermission(sender, "mobarena.use");
                     requireArgs(args, 2, "/ma info <arena>");
-                    info(sender, requireArena(args[1]));
+                    Arena arena = requireArena(args[1]);
+                    if (sender instanceof Player player) menu.openInfo(player, arena.getId());
+                    else info(sender, arena);
+                }
+                case "classes" -> {
+                    requirePermission(sender, "mobarena.use");
+                    menu.openClasses(requirePlayer(sender));
                 }
                 case "stats" -> stats(sender, args);
                 case "history" -> history(sender, args);
                 case "match" -> match(sender, args);
                 case "top" -> {
                     requirePermission(sender, "mobarena.top");
+                    if (sender instanceof Player player) { menu.openLeaderboard(player); return true; }
                     reply(sender, plugin.getEconomyService().top(10), records -> {
-                        message(sender, "Arena leaderboard (kills; earnings are confirmed):");
+                        message(sender, "Arena leaderboard by kills (paid earnings):");
                         int rank = 1;
-                        for (var record : records) message(sender, rank++ + ". " + playerName(record.playerId()) + " | $" + record.earned().toPlainString() + " | " + record.kills() + " kills | best wave " + record.highestWave());
-                        if (records.isEmpty()) message(sender, "No recorded sessions yet.");
+                        for (var record : records) message(sender, rank++ + ". " + record.playerName() + " | $" + record.earned().toPlainString() + " | " + record.kills() + " kills | best wave " + record.highestWave());
+                        if (records.isEmpty()) message(sender, "No matches recorded yet.");
                     });
                 }
                 case "admin" -> admin(sender, args);
-                default -> throw new IllegalArgumentException("Commands: /ma join, leave, list, info, stats, history, match, top, admin.");
+                default -> throw new IllegalArgumentException("Commands: /ma join, leave, list, info, classes, stats, history, match, top, admin.");
             }
         } catch (IllegalArgumentException | IllegalStateException ex) {
             error(sender, ex.getMessage());
         } catch (Exception ex) {
             plugin.getLogger().log(java.util.logging.Level.SEVERE, "MobArena command failed", ex);
-            error(sender, "Action failed safely. Ask an administrator to check the server log.");
+            error(sender, "Something went wrong. Ask an admin to check the server log.");
         }
         return true;
     }
@@ -106,18 +117,24 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
     private void stats(CommandSender sender, String[] args) {
         requirePermission(sender, "mobarena.stats");
         UUID id;
+        String cachedName = null;
         if (args.length > 1) {
             try { id = UUID.fromString(args[1]); }
             catch (IllegalArgumentException ignored) {
                 OfflinePlayer target = Bukkit.getOfflinePlayerIfCached(args[1]);
-                if (target == null) throw new IllegalArgumentException("Unknown cached player; supply their UUID instead.");
+                if (target == null) throw new IllegalArgumentException("That player isn't in the server cache. Use their UUID instead.");
                 id = target.getUniqueId();
+                cachedName = target.getName();
             }
             if (!(sender instanceof Player player) || !player.getUniqueId().equals(id)) requirePermission(sender, "mobarena.stats.others");
         } else id = requirePlayer(sender).getUniqueId();
         UUID playerId = id;
+        if (sender instanceof Player player) {
+            menu.openStats(player, playerId, cachedOrOnlineName(sender, playerId, cachedName));
+            return;
+        }
         reply(sender, plugin.getEconomyService().stats(id), stats -> {
-            message(sender, "Statistics for " + playerName(playerId));
+            message(sender, "Statistics for " + stats.playerName());
             message(sender, "Sessions: " + stats.sessions() + " | Kills: " + stats.kills() + " | Best completed wave: " + stats.highestWave());
             message(sender, "Confirmed earnings: $" + stats.earned().toPlainString() + " | Damage: " + String.format(Locale.ROOT, "%.1f", stats.damage()));
         });
@@ -127,6 +144,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         requirePermission(sender, "mobarena.history");
         int page = 1;
         UUID playerId;
+        String cachedName = null;
         if (args.length <= 1) playerId = requirePlayer(sender).getUniqueId();
         else if (args[1].matches("[0-9]+")) {
             playerId = requirePlayer(sender).getUniqueId();
@@ -135,19 +153,25 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
             try { playerId = UUID.fromString(args[1]); }
             catch (IllegalArgumentException ignored) {
                 OfflinePlayer player = Bukkit.getOfflinePlayerIfCached(args[1]);
-                if (player == null) throw new IllegalArgumentException("Unknown cached player; supply their UUID instead.");
+                if (player == null) throw new IllegalArgumentException("That player isn't in the server cache. Use their UUID instead.");
                 playerId = player.getUniqueId();
+                cachedName = player.getName();
             }
             if (!(sender instanceof Player player) || !player.getUniqueId().equals(playerId)) requirePermission(sender, "mobarena.stats.others");
             if (args.length > 2) page = historyPage(args[2]);
         }
         UUID target = playerId;
         int selectedPage = page;
+        String targetName = cachedOrOnlineName(sender, target, cachedName);
+        if (sender instanceof Player player) {
+            menu.openHistory(player, target, targetName, selectedPage);
+            return;
+        }
         reply(sender, plugin.getEconomyService().history(playerId, page), rows -> {
-            message(sender, "Match history for " + playerName(target) + " - page " + selectedPage + ":");
+            message(sender, "Match history for " + targetName + " - page " + selectedPage + ":");
             for (var match : rows) {
                 message(sender, match.finishedAt() + " | " + match.arenaId() + " | completed wave " + match.completedWaves() + " | " + match.kills() + " kills | " + match.status() + (match.cancelled() ? " | cancelled" : ""));
-                message(sender, "Intended: " + match.intendedAmount().toPlainString() + " | Confirmed: " + match.confirmedAmount().toPlainString() + " | Caps: " + match.capsApplied() + " | Session: " + match.sessionId());
+                message(sender, "Reward: $" + match.intendedAmount().toPlainString() + " | Paid: $" + match.confirmedAmount().toPlainString() + " | Limits: " + match.capsApplied() + " | Match: " + match.sessionId());
             }
             if (rows.isEmpty()) message(sender, "No matches on this page.");
             else message(sender, "Use /ma history " + target + " " + (selectedPage + 1) + " for the next page; /ma match <session UUID> for the full roster.");
@@ -162,7 +186,9 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
     private void match(CommandSender sender, String[] args) {
         requirePermission(sender, "mobarena.match");
         requireArgs(args, 2, "/ma match <session UUID>");
-        reply(sender, plugin.getEconomyService().match(parseUuid(args[1])), match -> {
+        UUID sessionId = parseUuid(args[1]);
+        if (sender instanceof Player player) { menu.openMatch(player, sessionId); return; }
+        reply(sender, plugin.getEconomyService().match(sessionId), match -> {
             if (match == null) { warning(sender, "No recorded match has that session ID."); return; }
             message(sender, "Match " + match.sessionId() + " | " + match.arenaId() + " | " + match.startedAt() + " to " + match.finishedAt());
             message(sender, "Completed waves: " + match.completedWaves() + " | Kills: " + match.totalKills() + " | Pot: " + match.prizePot().toPlainString() + " | Unallocated: " + match.unallocatedPot().toPlainString());
@@ -178,7 +204,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
     private void admin(CommandSender sender, String[] args) {
         requireArgs(args, 2, "/ma admin <" + String.join("|", ADMIN_COMMANDS) + ">");
         String action = args[1].toLowerCase(Locale.ROOT);
-        if (!ADMIN_COMMANDS.contains(action)) throw new IllegalArgumentException("Unknown administrative action.");
+        if (!ADMIN_COMMANDS.contains(action)) throw new IllegalArgumentException("Unknown admin command.");
         requirePermission(sender, "mobarena.admin." + action);
         switch (action) {
             case "npc" -> npc(sender,args);
@@ -286,7 +312,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                         setup(sender, requireArena(id));
                         return;
                     }
-                    default -> throw new IllegalArgumentException("Unknown administrative action.");
+                    default -> throw new IllegalArgumentException("Unknown admin command.");
                 }
                 success(sender, action + " completed for " + id + ".");
             }
@@ -376,8 +402,8 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
 
     private void info(CommandSender sender, Arena arena) {
         message(sender, "Arena: " + arena.getName() + " (" + arena.getId() + ") | " + arena.getArenaState());
-        message(sender, "Wave: " + arena.getCurrentWave() + " | Completed: " + arena.getCompletedWaves() + " | Players: " + arena.getPlayers().size() + "/" + arena.getMaxPlayers() + " | Pot: " + arena.getPrizePot().toPlainString());
-        if (sender instanceof Player player) message(sender, "Your kills: " + arena.getKills(player.getUniqueId()) + " | Estimated reward: " + estimatedShare(arena, player.getUniqueId()).toPlainString() + " (before eligibility and caps; not guaranteed)");
+        message(sender, "Wave: " + arena.getCurrentWave() + " | Completed: " + arena.getCompletedWaves() + " | Players: " + arena.getPlayers().size() + "/" + arena.getMaxPlayers() + " | Pot: $" + arena.getPrizePot().toPlainString());
+        if (sender instanceof Player player) message(sender, "Your kills: " + arena.getKills(player.getUniqueId()) + " | Estimated reward: $" + estimatedShare(arena, player.getUniqueId()).toPlainString() + " (your final reward may be lower)");
     }
 
     public static BigDecimal estimatedShare(Arena arena, UUID playerId) {
@@ -393,7 +419,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                 if (sender instanceof Player player && !player.isOnline()) return;
                 if (failure != null) {
                     plugin.getLogger().log(java.util.logging.Level.WARNING, "Arena database command failed", failure);
-                    error(sender, "Database action failed. Check the console; no payment retry was attempted.");
+                    error(sender, "Couldn't complete that request. Ask an admin to check the server log.");
                 } else success.accept(value);
             });
         });
@@ -473,6 +499,12 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
     private static Player requirePlayer(CommandSender sender) { if (sender instanceof Player player) return player; throw new IllegalArgumentException("This action requires an in-game player."); }
     private static void requirePermission(CommandSender sender, String permission) { if (!sender.hasPermission(permission)) throw new IllegalArgumentException("Missing permission: " + permission); }
     private static UUID parseUuid(String text) { try { return UUID.fromString(text); } catch (IllegalArgumentException ex) { throw new IllegalArgumentException("Enter a complete valid UUID."); } }
+    private static String cachedOrOnlineName(CommandSender sender, UUID id, String cachedName) {
+        if (sender instanceof Player player && player.getUniqueId().equals(id)) return player.getName();
+        if (cachedName != null && !cachedName.isBlank()) return cachedName;
+        Player online = Bukkit.getPlayer(id);
+        return online == null ? id.toString() : online.getName();
+    }
     private static String playerName(UUID id) { String name = Bukkit.getOfflinePlayer(id).getName(); return name == null ? id.toString() : name; }
 
     @Override

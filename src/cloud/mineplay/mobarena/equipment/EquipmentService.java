@@ -39,6 +39,7 @@ import org.bukkit.event.player.PlayerItemDamageEvent;
 import org.bukkit.event.player.PlayerItemMendEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerSwapHandItemsEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
@@ -47,6 +48,7 @@ import org.bukkit.inventory.CraftingInventory;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -54,10 +56,12 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.logging.Level;
 
 /** Owns durable inventory recovery. Every player operation and callback runs on the server thread. */
@@ -70,14 +74,19 @@ public final class EquipmentService implements Listener {
         Visit(SnapshotStore.Entry entry, boolean persisted) { this.entry = entry; this.persisted = persisted; }
     }
 
+    private record Preparation(UUID token, Player player, String choice, ClassKit kit, Runnable ready, Consumer<String> failed) { }
+
     private final JavaPlugin plugin;
     private final SnapshotStore store;
     private final ExecutorService worker;
     private final Map<UUID, Visit> visits = new HashMap<>();
+    private final Map<UUID, Preparation> preparations = new HashMap<>();
     private final Set<UUID> locked = new HashSet<>();
     private final Set<UUID> internalChanges = new HashSet<>();
     private Map<String, ClassKit> kits;
     private String equipmentMode;
+    private Function<UUID, CompletableFuture<Long>> lifetimeKillsLookup = id ->
+            CompletableFuture.failedFuture(new IllegalStateException("Lifetime kills are not available"));
     private volatile boolean closing;
 
     public EquipmentService(JavaPlugin plugin) {
@@ -112,6 +121,15 @@ public final class EquipmentService implements Listener {
         Bukkit.getScheduler().runTask(plugin, () -> Bukkit.getOnlinePlayers().forEach(this::recover));
     }
 
+    EquipmentService(JavaPlugin plugin, SnapshotStore store, ExecutorService worker,
+                     Map<String, ClassKit> kits, String equipmentMode) {
+        this.plugin = plugin;
+        this.store = store;
+        this.worker = worker;
+        this.kits = Map.copyOf(kits);
+        this.equipmentMode = equipmentMode;
+    }
+
     public void reload() {
         requireMainThread();
         String mode = plugin.getConfig().getString("equipment.mode", "BOTH").toUpperCase(Locale.ROOT);
@@ -119,10 +137,32 @@ public final class EquipmentService implements Listener {
         Map<String, ClassKit> replacement = ClassKit.load(new File(plugin.getDataFolder(), "classes.yml"));
         kits = replacement;
         equipmentMode = mode;
+        for (Preparation preparation : List.copyOf(preparations.values())) {
+            UUID id = preparation.player().getUniqueId();
+            if (preparations.remove(id, preparation)) {
+                locked.remove(id);
+                preparation.failed().accept("Classes have changed. Please choose your class again.");
+            }
+        }
     }
 
     public void reloadClasses() { reload(); }
+    /** The supplied function must queue its lookup and return without waiting for storage. */
+    public void setLifetimeKillsLookup(Function<UUID, CompletableFuture<Long>> lookup) {
+        requireMainThread();
+        lifetimeKillsLookup = java.util.Objects.requireNonNull(lookup);
+    }
     public List<String> classNames() { return kits.keySet().stream().sorted().toList(); }
+    public List<ClassChoice> classChoices() {
+        if (equipmentMode.equals("PERSONAL")) return List.of();
+        return kits.values().stream().map(ClassKit::choice)
+                .sorted(Comparator.comparingLong(ClassChoice::requiredKills).thenComparing(ClassChoice::id)).toList();
+    }
+    public ClassChoice choice(String selection) {
+        String normalized = normalizeChoice(selection);
+        ClassKit kit = equipmentMode.equals("PERSONAL") ? null : kits.get(normalized);
+        return kit == null ? null : kit.choice();
+    }
     public List<String> availableChoices() {
         List<String> choices = new ArrayList<>();
         if (!equipmentMode.equals("CLASS")) choices.add("PERSONAL");
@@ -140,15 +180,73 @@ public final class EquipmentService implements Listener {
     public void prepare(Player player, String selection, Runnable ready, Consumer<String> failed) {
         requireMainThread();
         UUID id = player.getUniqueId();
-        if (closing || visits.containsKey(id) || locked.contains(id)) {
+        if (closing || visits.containsKey(id) || locked.contains(id) || preparations.containsKey(id)) {
             failed.accept("Your previous equipment recovery is still pending.");
             return;
         }
-        String choice = selection == null ? "PERSONAL" : selection.trim();
-        if (choice.regionMatches(true, 0, "CLASS:", 0, 6)) choice = choice.substring(6);
-        choice = choice.equalsIgnoreCase("PERSONAL") ? "PERSONAL" : choice.toLowerCase(Locale.ROOT);
+        String choice = normalizeChoice(selection);
         if (!availableChoices().contains(choice)) {
             failed.accept("Equipment choice is unavailable. Choose: " + String.join(", ", availableChoices()));
+            return;
+        }
+        ClassKit kit = kits.get(choice);
+        if (kit != null && kit.choice().requiredKills() > 0) {
+            Preparation preparation = new Preparation(UUID.randomUUID(), player, choice, kit, ready, failed);
+            preparations.put(id, preparation);
+            // Keep the inventory stable while the ledger lookup runs. No snapshot or kit
+            // change happens until the result has been checked on the server thread.
+            locked.add(id);
+            try {
+                CompletableFuture<Long> kills = lifetimeKillsLookup.apply(id);
+                if (kills == null) throw new IllegalStateException("No lifetime kill lookup result");
+                kills.copy().orTimeout(10, TimeUnit.SECONDS).whenComplete((total, error) ->
+                        sync(() -> finishUnlockCheck(id, preparation, total, error)));
+            } catch (RuntimeException error) {
+                finishUnlockCheck(id, preparation, null, error);
+            }
+            return;
+        }
+        prepareEquipment(player, choice, kit, ready, failed);
+    }
+
+    private static String normalizeChoice(String selection) {
+        String choice = selection == null ? "PERSONAL" : selection.trim();
+        if (choice.regionMatches(true, 0, "CLASS:", 0, 6)) choice = choice.substring(6).trim();
+        return choice.equalsIgnoreCase("PERSONAL") ? "PERSONAL" : choice.toLowerCase(Locale.ROOT);
+    }
+
+    private void finishUnlockCheck(UUID id, Preparation preparation, Long kills, Throwable error) {
+        requireMainThread();
+        if (!preparations.remove(id, preparation)) return;
+        locked.remove(id);
+        Player player = preparation.player();
+        if (closing || !player.isOnline() || Bukkit.getPlayer(id) != player) {
+            preparation.failed().accept("You left before your class was ready. Join again to play.");
+            return;
+        }
+        if (error != null || kills == null || kills < 0) {
+            preparation.failed().accept("Couldn't check your arena kills. Please try joining again in a moment.");
+            return;
+        }
+        ClassChoice choice = preparation.kit().choice();
+        if (!choice.unlocked(kills)) {
+            preparation.failed().accept(String.format(Locale.ROOT, "%s unlocks at %,d arena kills. You have %,d.",
+                    choice.displayName(), choice.requiredKills(), kills));
+            return;
+        }
+        prepareEquipment(player, preparation.choice(), preparation.kit(), preparation.ready(), preparation.failed());
+    }
+
+    /** Cancels a pending unlock lookup without touching an equipment recovery already in progress. */
+    public void cancelPreparation(UUID id) {
+        requireMainThread();
+        if (preparations.remove(id) != null && !visits.containsKey(id)) locked.remove(id);
+    }
+
+    private void prepareEquipment(Player player, String choice, ClassKit kit, Runnable ready, Consumer<String> failed) {
+        UUID id = player.getUniqueId();
+        if (player.isDead() || player.isInsideVehicle() || player.isGliding() || player.isSleeping()) {
+            failed.accept("Stand safely before joining.");
             return;
         }
         String carriedError = carriedInventoryError(player);
@@ -156,7 +254,6 @@ public final class EquipmentService implements Listener {
             failed.accept(carriedError);
             return;
         }
-        ClassKit kit = kits.get(choice);
         player.closeInventory();
         locked.add(id);
         final Visit visit;
@@ -215,6 +312,7 @@ public final class EquipmentService implements Listener {
     public void restore(Player player, Location exit, Runnable done) {
         requireMainThread();
         UUID id = player.getUniqueId();
+        cancelPreparation(id);
         Visit visit = visits.get(id);
         if (visit == null) { done.run(); return; }
         locked.add(id);
@@ -325,6 +423,7 @@ public final class EquipmentService implements Listener {
     public void shutdown() {
         requireMainThread();
         closing = true;
+        for (UUID id : List.copyOf(preparations.keySet())) cancelPreparation(id);
         locked.addAll(visits.keySet());
         worker.shutdown();
         try {
@@ -401,6 +500,8 @@ public final class EquipmentService implements Listener {
     @EventHandler(priority = EventPriority.LOWEST)
     public void join(PlayerJoinEvent event) { recover(event.getPlayer()); }
     @EventHandler(priority = EventPriority.MONITOR)
+    public void quit(PlayerQuitEvent event) { cancelPreparation(event.getPlayer().getUniqueId()); }
+    @EventHandler(priority = EventPriority.MONITOR)
     public void respawn(PlayerRespawnEvent event) { Bukkit.getScheduler().runTask(plugin, () -> recover(event.getPlayer())); }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void click(InventoryClickEvent event) { if (event.getWhoClicked() instanceof Player player && locked(player)) event.setCancelled(true); }
@@ -444,7 +545,19 @@ public final class EquipmentService implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void bucket(PlayerBucketFillEvent event) { if (locked(event.getPlayer())) event.setCancelled(true); }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
-    public void command(PlayerCommandPreprocessEvent event) { if (locked(event.getPlayer())) event.setCancelled(true); }
+    public void command(PlayerCommandPreprocessEvent event) {
+        if (!locked(event.getPlayer())) return;
+        if (preparations.containsKey(event.getPlayer().getUniqueId())) {
+            String[] parts = event.getMessage().replaceFirst("^/", "").strip().toLowerCase(Locale.ROOT).split("\\s+");
+            if (parts.length == 2 && parts[1].equals("leave")) {
+                String root = parts[0];
+                if (root.startsWith("simplemobarena:")) root = root.substring("simplemobarena:".length());
+                org.bukkit.command.PluginCommand command = Bukkit.getPluginCommand(parts[0]);
+                if ((root.equals("ma") || root.equals("mobarena")) && command != null && command.getPlugin() == plugin) return;
+            }
+        }
+        event.setCancelled(true);
+    }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void consume(PlayerItemConsumeEvent event) { if (locked(event.getPlayer())) event.setCancelled(true); }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)

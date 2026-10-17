@@ -31,7 +31,7 @@ public final class ArenaMessages {
     public static void sendInfo(CommandSender sender, String text) { sender.sendMessage(info(text)); }
 
     private static Component format(String text, NamedTextColor colour) {
-        if (text == null || text.isBlank()) text = "An unexpected error occurred. Check the server console.";
+        if (text == null || text.isBlank()) text = "Something went wrong. Check the server console.";
         TextComponent.Builder body = Component.text().color(colour).decoration(TextDecoration.BOLD, false);
         Matcher commands = COMMAND.matcher(text);
         int position = 0;

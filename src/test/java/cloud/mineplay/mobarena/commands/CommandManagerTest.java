@@ -5,12 +5,14 @@ import cloud.mineplay.mobarena.arenas.Arena;
 import cloud.mineplay.mobarena.arenas.ArenaManager;
 import cloud.mineplay.mobarena.config.ArenaDefinition;
 import cloud.mineplay.mobarena.economy.EconomyService;
+import cloud.mineplay.mobarena.gui.ArenaMenu;
 import cloud.mineplay.mobarena.integration.CitizensArenaNpc;
 import cloud.mineplay.mobarena.messages.ArenaMessages;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -35,16 +37,185 @@ class CommandManagerTest {
     private SimpleMobArena plugin;
     private CommandSender sender;
     private CommandManager commands;
+    private ArenaMenu menu;
 
     @BeforeEach void setup() {
         bukkit = mockStatic(Bukkit.class);
         bukkit.when(Bukkit::getPluginManager).thenReturn(mock(PluginManager.class));
         plugin = mock(SimpleMobArena.class);
         sender = mock(CommandSender.class);
-        commands = new CommandManager(plugin);
+        menu = mock(ArenaMenu.class);
+        commands = new CommandManager(plugin, menu);
     }
 
     @AfterEach void cleanup() { bukkit.close(); }
+
+    @Test void playerReadCommandsOpenTheirMenusWithoutSendingChatReports() {
+        Player player = mock(Player.class);
+        UUID playerId = UUID.randomUUID(), sessionId = UUID.randomUUID();
+        when(player.getUniqueId()).thenReturn(playerId);
+        when(player.getName()).thenReturn(".BedrockPlayer");
+        when(player.hasPermission(anyString())).thenReturn(true);
+        ArenaManager manager = mock(ArenaManager.class);
+        Arena arena = mock(Arena.class);
+        when(plugin.getArenaManager()).thenReturn(manager);
+        when(manager.getArena("castle")).thenReturn(arena);
+        when(arena.getId()).thenReturn("castle");
+
+        commands.onCommand(player, null, "ma", new String[]{});
+        commands.onCommand(player, null, "ma", new String[]{"list"});
+        commands.onCommand(player, null, "ma", new String[]{"info", "castle"});
+        commands.onCommand(player, null, "ma", new String[]{"classes"});
+        commands.onCommand(player, null, "ma", new String[]{"stats"});
+        commands.onCommand(player, null, "ma", new String[]{"history", "3"});
+        commands.onCommand(player, null, "ma", new String[]{"match", sessionId.toString()});
+        commands.onCommand(player, null, "ma", new String[]{"top"});
+
+        verify(menu, times(2)).open(player, 0);
+        verify(menu).openInfo(player, "castle");
+        verify(menu).openClasses(player);
+        verify(menu).openStats(player, playerId, ".BedrockPlayer");
+        verify(menu).openHistory(player, playerId, ".BedrockPlayer", 3);
+        verify(menu).openMatch(player, sessionId);
+        verify(menu).openLeaderboard(player);
+        verifyNoMoreInteractions(menu);
+        verify(player, never()).sendMessage(any(Component.class));
+        verify(plugin, never()).getEconomyService();
+        bukkit.verify(() -> Bukkit.getOfflinePlayer(any(UUID.class)), never());
+    }
+
+    @Test void menuCommandsStillRequireTheirExistingPermissions() {
+        Player player = mock(Player.class);
+        for (String[] args : List.of(new String[]{}, new String[]{"list"}, new String[]{"info", "castle"},
+                new String[]{"classes"}, new String[]{"stats"}, new String[]{"history"},
+                new String[]{"match", UUID.randomUUID().toString()}, new String[]{"top"}, new String[]{"join", "castle"})) {
+            commands.onCommand(player, null, "ma", args);
+        }
+        verifyNoInteractions(menu);
+        verify(plugin, never()).getEconomyService();
+        verify(plugin, never()).getArenaManager();
+    }
+
+    @Test void cachedPlayerReportsNeedOthersPermissionBeforeOpeningMenus() {
+        Player player = mock(Player.class);
+        UUID ownId = UUID.randomUUID(), targetId = UUID.randomUUID();
+        when(player.getUniqueId()).thenReturn(ownId);
+        when(player.hasPermission("mobarena.stats")).thenReturn(true);
+        when(player.hasPermission("mobarena.history")).thenReturn(true);
+        OfflinePlayer target = mock(OfflinePlayer.class);
+        when(target.getUniqueId()).thenReturn(targetId);
+        when(target.getName()).thenReturn(".BedrockFriend");
+        bukkit.when(() -> Bukkit.getOfflinePlayerIfCached(".BedrockFriend")).thenReturn(target);
+
+        commands.onCommand(player, null, "ma", new String[]{"stats", ".BedrockFriend"});
+        commands.onCommand(player, null, "ma", new String[]{"history", ".BedrockFriend", "2"});
+        verifyNoInteractions(menu);
+
+        when(player.hasPermission("mobarena.stats.others")).thenReturn(true);
+        commands.onCommand(player, null, "ma", new String[]{"stats", ".BedrockFriend"});
+        commands.onCommand(player, null, "ma", new String[]{"history", ".BedrockFriend", "2"});
+        verify(menu).openStats(player, targetId, ".BedrockFriend");
+        verify(menu).openHistory(player, targetId, ".BedrockFriend", 2);
+        verify(plugin, never()).getEconomyService();
+        bukkit.verify(() -> Bukkit.getOfflinePlayer(any(UUID.class)), never());
+    }
+
+    @Test void uuidReportsUseOnlineNamesOrUuidFallbackWithoutLoadingOfflinePlayerData() {
+        Player viewer = mock(Player.class), online = mock(Player.class);
+        UUID onlineId = UUID.randomUUID(), offlineId = UUID.randomUUID();
+        when(viewer.getUniqueId()).thenReturn(UUID.randomUUID());
+        when(viewer.hasPermission(anyString())).thenReturn(true);
+        when(online.getName()).thenReturn(".OnlineFriend");
+        bukkit.when(() -> Bukkit.getPlayer(onlineId)).thenReturn(online);
+
+        commands.onCommand(viewer, null, "ma", new String[]{"stats", onlineId.toString()});
+        commands.onCommand(viewer, null, "ma", new String[]{"history", onlineId.toString()});
+        commands.onCommand(viewer, null, "ma", new String[]{"stats", offlineId.toString()});
+        commands.onCommand(viewer, null, "ma", new String[]{"history", offlineId.toString()});
+
+        verify(menu).openStats(viewer, onlineId, ".OnlineFriend");
+        verify(menu).openHistory(viewer, onlineId, ".OnlineFriend", 1);
+        verify(menu).openStats(viewer, offlineId, offlineId.toString());
+        verify(menu).openHistory(viewer, offlineId, offlineId.toString(), 1);
+        bukkit.verify(() -> Bukkit.getOfflinePlayer(any(UUID.class)), never());
+        verify(plugin, never()).getEconomyService();
+    }
+
+    @Test void ownUuidDoesNotRequireOthersPermissionAndBadTargetsCannotOpenMenus() {
+        Player player = mock(Player.class);
+        UUID id = UUID.randomUUID();
+        when(player.getUniqueId()).thenReturn(id);
+        when(player.getName()).thenReturn("Alex");
+        when(player.hasPermission("mobarena.stats")).thenReturn(true);
+        when(player.hasPermission("mobarena.history")).thenReturn(true);
+        when(player.hasPermission("mobarena.match")).thenReturn(true);
+
+        commands.onCommand(player, null, "ma", new String[]{"stats", id.toString()});
+        commands.onCommand(player, null, "ma", new String[]{"history", id.toString(), "2"});
+        verify(player, never()).hasPermission("mobarena.stats.others");
+        verify(menu).openStats(player, id, "Alex");
+        verify(menu).openHistory(player, id, "Alex", 2);
+        clearInvocations(menu);
+
+        commands.onCommand(player, null, "ma", new String[]{"stats", "UnknownPlayer"});
+        commands.onCommand(player, null, "ma", new String[]{"history", "0"});
+        commands.onCommand(player, null, "ma", new String[]{"match", "not-a-uuid"});
+        verifyNoInteractions(menu);
+        verify(plugin, never()).getEconomyService();
+    }
+
+    @Test void joinWithoutAnEquipmentChoiceOpensSelectionAndExplicitChoiceStillJoins() {
+        Player player = mock(Player.class);
+        when(player.hasPermission("mobarena.join")).thenReturn(true);
+        ArenaManager manager = mock(ArenaManager.class);
+        Arena arena = mock(Arena.class);
+        when(plugin.getArenaManager()).thenReturn(manager);
+        when(manager.getArena("castle")).thenReturn(arena);
+        when(arena.getId()).thenReturn("castle");
+
+        commands.onCommand(player, null, "ma", new String[]{"join", "castle"});
+        verify(menu).openEquipment(player, "castle");
+        verify(manager, never()).join(any(), anyString(), anyString());
+
+        commands.onCommand(player, null, "ma", new String[]{"join", "castle", "personal"});
+        commands.onCommand(player, null, "ma", new String[]{"join", "castle", "knight"});
+        verify(manager).join(player, "castle", "personal");
+        verify(manager).join(player, "castle", "knight");
+        verifyNoMoreInteractions(menu);
+    }
+
+    @Test void consoleKeepsTextAndAsynchronousReportsWithoutOpeningInventories() {
+        when(sender.hasPermission(anyString())).thenReturn(true);
+        ArenaManager manager = mock(ArenaManager.class);
+        EconomyService economy = mock(EconomyService.class);
+        Arena arena = mock(Arena.class);
+        UUID target = UUID.randomUUID(), session = UUID.randomUUID();
+        when(plugin.getArenaManager()).thenReturn(manager);
+        when(plugin.getEconomyService()).thenReturn(economy);
+        when(manager.getArenas()).thenReturn(List.of(arena));
+        when(manager.getArena("castle")).thenReturn(arena);
+        when(arena.getId()).thenReturn("castle");
+        when(arena.getName()).thenReturn("Castle Arena");
+        when(arena.getPrizePot()).thenReturn(java.math.BigDecimal.ZERO);
+        when(economy.stats(target)).thenReturn(new CompletableFuture<>());
+        when(economy.history(target, 2)).thenReturn(new CompletableFuture<>());
+        when(economy.match(session)).thenReturn(new CompletableFuture<>());
+        when(economy.top(10)).thenReturn(new CompletableFuture<>());
+
+        commands.onCommand(sender, null, "ma", new String[]{"list"});
+        commands.onCommand(sender, null, "ma", new String[]{"info", "castle"});
+        commands.onCommand(sender, null, "ma", new String[]{"stats", target.toString()});
+        commands.onCommand(sender, null, "ma", new String[]{"history", target.toString(), "2"});
+        commands.onCommand(sender, null, "ma", new String[]{"match", session.toString()});
+        commands.onCommand(sender, null, "ma", new String[]{"top"});
+
+        verify(sender, atLeast(3)).sendMessage(any(Component.class));
+        verify(economy).stats(target);
+        verify(economy).history(target, 2);
+        verify(economy).match(session);
+        verify(economy).top(10);
+        verifyNoInteractions(menu);
+    }
 
     @Test void deniedAdministrativeActionDoesNotTouchArenaManager() {
         assertTrue(commands.onCommand(sender, null, "ma", new String[]{"admin", "stop", "spawn"}));

@@ -1,6 +1,6 @@
 # Mineplay SimpleMobArena — website data and API handoff
 
-Updated for plugin **1.0.6**, ledger schema **4**, on **17 October 2026**. Source match/payout semantics below remain unchanged. The durable publisher is now implemented; see [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md) for the current configuration, commands and recovery contract. The PostgreSQL DDL and queries below are design examples; the website repository owns its deployed schema and importer.
+Updated for plugin **1.0.7**, ledger schema **4**, on **17 October 2026**. Source match/payout semantics and the v1 API payload remain unchanged. See [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md) for publisher configuration, commands and recovery. The PostgreSQL DDL and queries below are design examples; the website repository owns its deployed schema and importer.
 
 ## Brief for the website Codex instance
 
@@ -52,6 +52,10 @@ Only matches that actually started are persisted. Leaving/cancelling a lobby bef
 Eliminated players, voluntary leavers and disconnected players remain in the finished roster with their contributions. SQL outages can delay appearance of a finished match. Abruptly interrupted active matches are not resumed and are not automatically converted into completed match records. A graceful stop cancels started matches and records them without a payout.
 
 There is no separate source players table: lifetime statistics are aggregates over match participation and settlements.
+
+Since 1.0.7, class access can require `classes.<id>.required-kills` in the plugin's `classes.yml`. It uses the same lifetime kill aggregate, including cancelled/zero-reward matches. There is no saved unlock flag or selected-class field in a match, and the v1 API does not export class definitions or thresholds. A website showing class progress would need the actual server thresholds separately; do not assume fresh-install defaults apply to an upgraded server.
+
+The plugin also pauses queued payments for three seconds by default (`economy.payment-delay-seconds`, configurable 0–30). During this pause the recorded status remains PENDING. There is no exported deadline, and a restart restarts the brief pause. Continue showing pending until a newer snapshot confirms payment; never infer payment from elapsed time.
 
 ### sessions — one row per recorded match
 

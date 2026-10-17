@@ -59,7 +59,7 @@ public final class ArenaAnnouncements {
     }
 
     public void countdownPaused(int count, int minimum, Collection<Player> participants) {
-        Component body = Component.text("Countdown paused in ", NamedTextColor.YELLOW)
+        Component body = Component.text("Waiting for players in ", NamedTextColor.YELLOW)
             .append(Component.text(arenaName, NamedTextColor.GOLD))
             .append(Component.text(" · " + count + "/" + minimum + " players needed to start", NamedTextColor.GRAY));
         showTitle(Title.title(Component.text("COUNTDOWN PAUSED", NamedTextColor.YELLOW, TextDecoration.BOLD),
@@ -73,14 +73,16 @@ public final class ArenaAnnouncements {
             Component.text(arenaName + " · " + count + " players", NamedTextColor.GOLD),
             Title.Times.times(Duration.ofMillis(100), Duration.ofMillis(1100), Duration.ofMillis(250))), participants, false);
         Component body = Component.text(arenaName, NamedTextColor.GOLD)
-            .append(Component.text(" has started with " + count + " players. Joining is now closed.", NamedTextColor.GREEN));
+            .append(Component.text(" has started with " + count + (count == 1 ? " player" : " players")
+                + ". Join the next match!", NamedTextColor.GREEN));
         send(publicStart, participants, ignored -> ArenaMessages.info(body));
     }
 
     public void finished(boolean cancelled, int waves, Collection<Player> participants) {
         for (Player participant : recipients(copyParticipants(participants)).values()) clearCountdown(participant);
         Component body = Component.text(arenaName, NamedTextColor.GOLD)
-            .append(Component.text((cancelled ? " was cancelled after " : " finished after ") + waves + " completed waves.",
+            .append(Component.text((cancelled ? " was cancelled after " : " finished with ") + waves
+                + (waves == 1 ? " wave cleared." : " waves cleared."),
                 cancelled ? NamedTextColor.RED : NamedTextColor.GREEN));
         send(publicEnd, participants, ignored -> ArenaMessages.info(body));
     }
@@ -122,7 +124,7 @@ public final class ArenaAnnouncements {
                 message = message.append(Component.text(" · ", NamedTextColor.DARK_GRAY))
                     .append(Component.text(command, NamedTextColor.AQUA)
                         .clickEvent(ClickEvent.suggestCommand(command))
-                        .hoverEvent(HoverEvent.showText(Component.text("Click to fill in the join command", NamedTextColor.GRAY))));
+                        .hoverEvent(HoverEvent.showText(Component.text("Click, then press Enter to join", NamedTextColor.GRAY))));
             }
             return ArenaMessages.info(message);
         });

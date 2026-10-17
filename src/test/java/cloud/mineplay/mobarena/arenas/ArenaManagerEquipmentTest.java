@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.nio.file.Path;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -34,6 +35,7 @@ class ArenaManagerEquipmentTest {
     private Player player;
     private UUID playerId;
     private AtomicReference<Runnable> equipmentReady;
+    private AtomicReference<Consumer<String>> equipmentFailed;
 
     @BeforeEach void setup() {
         bukkit = mockStatic(Bukkit.class);
@@ -56,7 +58,8 @@ class ArenaManagerEquipmentTest {
         when(player.isOnline()).thenReturn(true);
         bukkit.when(() -> Bukkit.getPlayer(playerId)).thenReturn(player);
         equipmentReady = new AtomicReference<>();
-        doAnswer(call -> { equipmentReady.set(call.getArgument(2)); return null; })
+        equipmentFailed = new AtomicReference<>();
+        doAnswer(call -> { equipmentReady.set(call.getArgument(2)); equipmentFailed.set(call.getArgument(3)); return null; })
                 .when(equipment).prepare(eq(player),eq("knight"),any(),any());
     }
     @AfterEach void cleanup() { bukkit.close(); }
@@ -96,6 +99,62 @@ class ArenaManagerEquipmentTest {
         verify(arena).joined(player);
         manager.disconnected(player);
         verify(arena).eliminate(player,"left the match");
+    }
+
+    @Test void previousReadyCallbackCannotAdmitOrRestoreANewerReservation() {
+        manager.join(player,"spawn","knight");
+        Runnable previousReady = equipmentReady.get();
+        manager.leave(player);
+        manager.join(player,"spawn","knight");
+        Runnable currentReady = equipmentReady.get();
+
+        previousReady.run();
+        assertSame(arena,manager.getPlayerArena(playerId));
+        verify(arena,never()).joined(any());
+        verify(arena,times(1)).releaseReservation();
+        verify(equipment,times(1)).restore(eq(player),isNull(),any());
+
+        currentReady.run();
+        assertSame(arena,manager.getPlayerArena(playerId));
+        verify(arena,times(1)).joined(player);
+    }
+
+    @Test void previousFailureCallbackCannotRemoveANewerReservation() {
+        manager.join(player,"spawn","knight");
+        Consumer<String> previousFailure = equipmentFailed.get();
+        manager.leave(player);
+        manager.join(player,"spawn","knight");
+
+        previousFailure.accept("Old lookup failed");
+        assertSame(arena,manager.getPlayerArena(playerId));
+        verify(arena,times(1)).releaseReservation();
+        equipmentReady.get().run();
+        verify(arena,times(1)).joined(player);
+        assertSame(arena,manager.getPlayerArena(playerId));
+    }
+
+    @Test void duplicateReadyAndFailureCallbacksCannotRemoveAnAdmittedPlayer() {
+        manager.join(player,"spawn","knight");
+        equipmentReady.get().run();
+        equipmentReady.get().run();
+        equipmentFailed.get().accept("Duplicate callback");
+
+        verify(arena,times(1)).joined(player);
+        verify(arena,never()).releaseReservation();
+        verify(equipment,never()).restore(any(),any(),any());
+        assertSame(arena,manager.getPlayerArena(playerId));
+    }
+
+    @Test void cancellingOfflinePreparationsAlsoCancelsTheirPendingKillLookup() {
+        manager.join(player,"spawn","knight");
+        bukkit.when(() -> Bukkit.getPlayer(playerId)).thenReturn(null);
+        manager.cancelReservations(arena);
+        equipmentReady.get().run();
+
+        verify(equipment).cancelPreparation(playerId);
+        verify(arena,times(1)).releaseReservation();
+        verify(arena,never()).joined(any());
+        assertNull(manager.getPlayerArena(playerId));
     }
 
     @Test void replacingThePlayerInstanceDuringPreparationCannotAdmitTheStaleInstance() {

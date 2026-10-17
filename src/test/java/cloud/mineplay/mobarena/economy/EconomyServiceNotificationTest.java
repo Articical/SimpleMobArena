@@ -60,6 +60,7 @@ class EconomyServiceNotificationTest {
         when(plugin.isEnabled()).thenReturn(true);
         YamlConfiguration config = new YamlConfiguration();
         config.createSection("economy");
+        config.set("economy.payment-delay-seconds", 0);
         when(plugin.getConfig()).thenReturn(config);
         when(server.getScheduler()).thenReturn(scheduler);
         when(server.getPlayer(playerId)).thenReturn(player);
@@ -100,7 +101,7 @@ class EconomyServiceNotificationTest {
         verify(server, never()).getPlayer(any(UUID.class));
         verify(player, never()).sendMessage(any(Component.class));
         nextTask().run();
-        assertTrue(messages().getFirst().contains("Reward $100.00 awaiting payment"));
+        assertTrue(messages().getFirst().contains("Your reward: $100.00. Payment queued"));
 
         timers.getFirst().run();
         nextTask().run(); // Main-thread Vault call; no player access on the worker.
@@ -110,8 +111,8 @@ class EconomyServiceNotificationTest {
         nextTask().run();
 
         assertEquals(2, messages().size());
-        assertTrue(messages().getLast().contains("roof #" + sessionId.toString().substring(0, 8) + ": Paid $100.00."));
-        assertTrue(messages().getLast().contains("/ma history"));
+        assertTrue(messages().getLast().contains("roof: Paid $100.00."));
+        assertFalse(messages().getLast().contains("/ma history"));
         verify(gateway, times(1)).deposit(eq(playerId), eq(new BigDecimal("100.00")), anyInt());
     }
 
@@ -168,7 +169,7 @@ class EconomyServiceNotificationTest {
         flushWorker();
         nextTask().run();
 
-        assertTrue(messages().getLast().contains("Reward $0; no payment: reward limits were reapplied before payment"));
+        assertTrue(messages().getLast().contains("No reward this match: your reward limit changed before payment"));
         verify(gateway, never()).deposit(any(), any(), anyInt());
     }
 

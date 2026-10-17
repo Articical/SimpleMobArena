@@ -277,7 +277,12 @@ public final class SettlementStore implements AutoCloseable {
             statement.setString(1, player.toString());
             try (var rows = statement.executeQuery()) { while (rows.next()) earned = earned.add(new BigDecimal(rows.getString(1))); }
         }
-        return new PlayerStatistics(player, sessions, kills, damage, highest, earned);
+        String playerName = player.toString();
+        try (var statement = connection.prepareStatement("SELECT p.player_name FROM participants p JOIN sessions s ON p.session_id=s.session_id WHERE p.player_id=? ORDER BY s.finished_at DESC,s.session_id DESC LIMIT 1")) {
+            statement.setString(1, player.toString());
+            try (var rows = statement.executeQuery()) { if (rows.next()) playerName = rows.getString(1); }
+        }
+        return new PlayerStatistics(player, sessions, kills, damage, highest, earned, playerName);
     }
 
     public synchronized List<PlayerStatistics> top(int limit) throws SQLException {

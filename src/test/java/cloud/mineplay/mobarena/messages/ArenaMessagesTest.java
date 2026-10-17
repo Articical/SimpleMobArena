@@ -53,7 +53,7 @@ class ArenaMessagesTest {
     }
 
     @Test void missingExceptionDetailsStillProduceAUsefulError() {
-        assertEquals("MobArena » An unexpected error occurred. Check the server console.", plain(ArenaMessages.error(null)));
+        assertEquals("MobArena » Something went wrong. Check the server console.", plain(ArenaMessages.error(null)));
         assertEquals(ArenaMessages.error(null), ArenaMessages.error("   "));
     }
 
