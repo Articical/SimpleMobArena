@@ -41,18 +41,24 @@ class MySqlStorageIntegrationTest {
                 UUID player = UUID.randomUUID();
                 UUID session = UUID.randomUUID();
                 UUID token = UUID.randomUUID();
+                double preciseDamage = 123.45678901234567;
                 try (var ledger = new SettlementStore(sqlite); var equipment = new SnapshotStore(sqlite)) {
                     ledger.prepare(new SessionResult(session, "roof", start, start.plusSeconds(120), 3, new BigDecimal("123.45"),
-                            List.of(new SessionResult.Participant(player, "MySqlPlayer", 10, 25.5, 120)), false, "ELIMINATED"), EconomySettings.defaults(), start.plusSeconds(120));
+                            List.of(new SessionResult.Participant(player, "MySqlPlayer", 10, preciseDamage, 120)), false, "ELIMINATED"), EconomySettings.defaults(), start.plusSeconds(120));
                     var payment = ledger.claim(ledger.pending(1).getFirst().settlementId(), EconomySettings.defaults(), start.plusSeconds(121));
                     ledger.complete(payment.settlementId(), Settlement.Status.CONFIRMED, "", start.plusSeconds(122));
                     equipment.prepare(new SnapshotStore.Entry(player, token, "knight", new byte[]{0, 1, -1, 127}, null, SnapshotStore.Status.PREPARED));
                     equipment.beginRestore(player, token, new byte[]{2, 3, -128, 5});
                 }
+                StorageMigrationTest.populateExportQueue(sqlite, session);
+                var originalQueue = StorageMigrationTest.exportData(sqlite);
                 var first = StorageMigration.migrate(sqlite, mysql, true);
                 assertEquals(1, first.rows().get("sessions"));
+                assertEquals(3, first.rows().get("website_export_events"));
+                assertEquals(originalQueue, StorageMigrationTest.exportData(mysql));
                 try (var ledger = new SettlementStore(mysql); var equipment = new SnapshotStore(mysql)) {
                     assertEquals("MySqlPlayer", ledger.match(session).participants().getFirst().playerName());
+                    assertEquals(Double.doubleToRawLongBits(preciseDamage), Double.doubleToRawLongBits(ledger.match(session).participants().getFirst().damage()));
                     RewardCalculatorTest.assertMoney("123.45", ledger.stats(player).earned());
                     assertEquals(Settlement.Status.CONFIRMED, ledger.history(player, 1).getFirst().status());
                     assertArrayEquals(new byte[]{2, 3, -128, 5}, equipment.get(player).target());
@@ -70,10 +76,16 @@ class MySqlStorageIntegrationTest {
                      var rows = statement.executeQuery("SELECT total_kills,confirmed_earned_minor FROM mobarena_leaderboard")) {
                     assertTrue(rows.next()); assertEquals(30, rows.getLong(1)); assertEquals(12345, rows.getLong(2));
                 }
+                var remoteQueue = StorageMigrationTest.exportData(mysql);
                 var roundtrip = StorageMigration.migrate(mysql, returned, true);
                 assertEquals(2, roundtrip.rows().get("sessions"));
+                assertEquals(remoteQueue, StorageMigrationTest.exportData(returned));
+                assertEquals(first.sha256().get("website_export_events"), roundtrip.sha256().get("website_export_events"));
+                assertEquals(first.sha256().get("website_export_state"), roundtrip.sha256().get("website_export_state"));
+                assertEquals(first.sha256().get("website_match_revisions"), roundtrip.sha256().get("website_match_revisions"));
                 try (var from = new SettlementStore(mysql); var to = new SettlementStore(returned); var equipment = new SnapshotStore(returned)) {
                     assertEquals(from.history(player, 1), to.history(player, 1));
+                    assertEquals(Double.doubleToRawLongBits(preciseDamage), Double.doubleToRawLongBits(to.match(session).participants().getFirst().damage()));
                     assertEquals(SnapshotStore.Status.CONFIRMED, equipment.get(player).status());
                     assertArrayEquals(new byte[]{0, 1, -1, 127}, equipment.get(player).original());
                 }

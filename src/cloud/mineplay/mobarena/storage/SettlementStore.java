@@ -30,6 +30,7 @@ import java.util.UUID;
 public final class SettlementStore implements AutoCloseable {
     private final Connection connection;
     private final boolean mysql;
+    private final WebsiteExportStore website;
 
     public SettlementStore(Path database) throws SQLException, IOException {
         this(DatabaseSettings.sqlite(database.toAbsolutePath().getParent()), database.getFileName().toString());
@@ -45,6 +46,7 @@ public final class SettlementStore implements AutoCloseable {
             try { connection.close(); } catch (SQLException close) { exception.addSuppressed(close); }
             throw exception;
         }
+        website = new WebsiteExportStore(connection, mysql);
     }
 
     private void migrate() throws SQLException, IOException {
@@ -62,12 +64,13 @@ public final class SettlementStore implements AutoCloseable {
                 version = rows.getInt(1);
             }
         }
-        if (version > 3) throw new SQLException("Ledger schema is newer than this plugin; refusing to downgrade");
-        for (int next = version + 1; next <= 3; next++) {
+        if (version > 4) throw new SQLException("Ledger schema is newer than this plugin; refusing to downgrade");
+        for (int next = version + 1; next <= 4; next++) {
             String resource = switch (next) {
                 case 1 -> mysql ? "/db/001-mysql.sql" : "/db/001-initial.sql";
                 case 2 -> "/db/002-match-details.sql";
                 case 3 -> mysql ? "/db/003-reporting-views-mysql.sql" : "/db/003-reporting-views.sql";
+                case 4 -> mysql ? "/db/004-website-export-mysql.sql" : "/db/004-website-export.sql";
                 default -> throw new IllegalStateException();
             };
             String schema;
@@ -97,6 +100,7 @@ public final class SettlementStore implements AutoCloseable {
                 updateStatus(payment.settlementId(), Status.UNCERTAIN, null, "Process stopped while payment was processing");
                 audit(payment.settlementId(), now, "SYSTEM", "RECOVER_UNCERTAIN", "Do not retry; verify provider records before reconciliation");
             }
+            for (UUID session : processing.stream().map(Settlement::sessionId).distinct().toList()) website.enqueue(session, now);
             return processing.size();
         });
     }
@@ -148,6 +152,7 @@ public final class SettlementStore implements AutoCloseable {
                 allocated = allocated.add(amount);
             }
             setUnallocated(result.sessionId(), recordedPot.subtract(allocated));
+            website.enqueue(result.sessionId(), now);
             return true;
         });
     }
@@ -173,6 +178,7 @@ public final class SettlementStore implements AutoCloseable {
                 if (statement.executeUpdate() != 1) throw new SQLException("Settlement claim conflict");
             }
             audit(settlementId, now, "SYSTEM", status.name(), "amount=" + amount.toPlainString());
+            website.enqueue(payment.sessionId(), now);
             return status == Status.PROCESSING ? get(settlementId) : null;
         });
     }
@@ -187,6 +193,7 @@ public final class SettlementStore implements AutoCloseable {
             updateStatus(id, status, status == Status.CONFIRMED ? now : null, error);
             if (status == Status.FAILED) addUnallocated(payment.sessionId(), payment.intendedAmount());
             audit(id, now, "VAULT", status.name(), error == null ? "" : error);
+            website.enqueue(payment.sessionId(), now);
             return null;
         });
     }
@@ -203,11 +210,43 @@ public final class SettlementStore implements AutoCloseable {
             updateStatus(id, target, target == Status.CONFIRMED ? now : null, "Administratively reconciled by " + actor);
             if (target == Status.VOID) addUnallocated(payment.sessionId(), payment.intendedAmount());
             audit(id, now, actor, "RECONCILE_" + target, "Operator has verified provider records; no new deposit was made");
+            website.enqueue(payment.sessionId(), now);
             return "Settlement " + id + " recorded as " + target + ". No money was sent.";
         });
     }
 
     public synchronized List<Settlement> pending(int limit) throws SQLException { return byStatus(Status.PENDING, limit); }
+
+    /** All facade methods are intended for the background ledger worker, never the Paper thread. */
+    public synchronized void configureWebsiteExport(boolean enabled, UUID sourceId, Instant now) throws SQLException {
+        transaction(() -> { website.configure(enabled, sourceId); return null; });
+    }
+
+    public synchronized List<WebsiteExportStore.Event> websiteEvents(Instant now, int limit) throws SQLException {
+        return website.events(now, limit);
+    }
+
+    public synchronized void websiteDelivered(UUID eventId, long storedRevision, Instant now) throws SQLException {
+        transaction(() -> { website.delivered(eventId, storedRevision, now); return null; });
+    }
+
+    public synchronized void websiteFailed(UUID eventId, String safeCode, Instant nextAttempt, boolean quarantine) throws SQLException {
+        transaction(() -> { website.failed(eventId, safeCode, nextAttempt, quarantine); return null; });
+    }
+
+    public synchronized WebsiteExportStore.Status websiteStatus() throws SQLException { return website.status(); }
+
+    public synchronized boolean websiteRetry(UUID eventId, Instant now) throws SQLException {
+        return transaction(() -> website.retry(eventId, now));
+    }
+
+    public synchronized void websiteStartBackfill(Instant now) throws SQLException {
+        transaction(() -> { website.startBackfill(); return null; });
+    }
+
+    public synchronized int websiteBackfillBatch(int limit, Instant now) throws SQLException {
+        return transaction(() -> website.backfillBatch(limit, now));
+    }
 
     public synchronized List<Settlement> payouts(UUID session) throws SQLException {
         try (var statement = connection.prepareStatement("SELECT * FROM settlements WHERE session_id=? ORDER BY player_id")) {

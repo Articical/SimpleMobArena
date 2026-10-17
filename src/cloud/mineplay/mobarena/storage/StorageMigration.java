@@ -13,7 +13,6 @@ import java.sql.SQLException;
 import java.sql.Types;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -28,6 +27,9 @@ public final class StorageMigration {
             new Table("participants", "session_id,player_id", false),
             new Table("settlements", "settlement_id", false),
             new Table("settlement_audit", "id", false),
+            new Table("website_export_state", "id", false),
+            new Table("website_match_revisions", "session_id", false),
+            new Table("website_export_events", "event_id", false),
             new Table("equipment_snapshots", "player_uuid", true));
     private static final Set<String> DECIMALS = Set.of("prize_pot", "unallocated_pot", "share", "gross_amount", "intended_amount");
 
@@ -54,6 +56,7 @@ public final class StorageMigration {
         System.out.println("Migration verified. Source preserved. Review the counts below, back up both backends, then change the server storage configuration.");
         report.rows().forEach((table, count) -> System.out.println(table + ": " + count + " rows; SHA-256 " + report.sha256().get(table)));
         System.out.println("PROCESSING payments remain PROCESSING and will recover to UNCERTAIN at plugin startup. Never run both copies as active servers.");
+        System.out.println("Website source identity, revisions and deliveries are preserved byte-for-byte. Fence the old publisher before enabling the migrated copy.");
     }
 
     private static DatabaseSettings load(Path config, Path directory) throws Exception {
@@ -130,16 +133,17 @@ public final class StorageMigration {
     }
 
     private static void validateSource(Connections connections, boolean mysql) throws SQLException {
-        for (Table table : TABLES) if (!exists(connections.forTable(table), table.name())) throw new SQLException("Source table is missing: " + table.name());
-        for (var pair : Map.of("ledger", 3, "equipment", 1).entrySet()) {
+        for (var pair : Map.of("ledger", 4, "equipment", 1).entrySet()) {
             Connection connection = pair.getKey().equals("equipment") ? connections.equipment : connections.ledger;
             String sql = mysql ? "SELECT version FROM mobarena_schema WHERE component='" + pair.getKey() + "'" : "PRAGMA user_version";
             try (var statement = connection.createStatement(); var rows = statement.executeQuery(sql)) {
                 if (!rows.next() || rows.getInt(1) != pair.getValue()) {
-                    throw new SQLException("Source schema is not current for " + pair.getKey() + "; run the matching plugin version and stop it before migration");
+                    throw new SQLException("Source schema is not current for " + pair.getKey()
+                            + "; run the matching plugin version with website export disabled and stop it before migration");
                 }
             }
         }
+        for (Table table : TABLES) if (!exists(connections.forTable(table), table.name())) throw new SQLException("Source table is missing: " + table.name());
     }
 
     private static void requireEmpty(Connections connections) throws SQLException {
@@ -212,6 +216,12 @@ public final class StorageMigration {
                     if (rows.getObject(index) == null) { digest.update(ByteBuffer.allocate(4).putInt(-1).array()); continue; }
                     if (isBinary(column)) value = rows.getBytes(index);
                     else if (DECIMALS.contains(column)) value = new BigDecimal(rows.getString(index)).stripTrailingZeros().toPlainString().getBytes(StandardCharsets.UTF_8);
+                    else if (isFloating(rows.getMetaData().getColumnType(index))) {
+                        // SQLite's REAL-to-text conversion can round significant digits. Both
+                        // providers expose the stored numeric double exactly through JDBC.
+                        double number = rows.getDouble(index);
+                        value = Double.toString(number == 0.0 ? 0.0 : number).getBytes(StandardCharsets.UTF_8);
+                    }
                     else value = rows.getString(index).getBytes(StandardCharsets.UTF_8);
                     digest.update(ByteBuffer.allocate(4).putInt(value.length).array()); digest.update(value);
                 }
@@ -220,7 +230,10 @@ public final class StorageMigration {
         return new Fingerprint(count, HexFormat.of().formatHex(digest.digest()));
     }
 
-    private static boolean isBinary(String column) { return column.equals("original") || column.equals("restore_target"); }
+    private static boolean isBinary(String column) {
+        return column.equals("original") || column.equals("restore_target") || column.equals("payload");
+    }
+    private static boolean isFloating(int type) { return type == Types.REAL || type == Types.FLOAT || type == Types.DOUBLE; }
     public record MigrationReport(Map<String, Long> rows, Map<String, String> sha256) { }
     private record Fingerprint(long rows, String sha256) { }
     private record Table(String name, String order, boolean equipment) { }

@@ -26,7 +26,7 @@ import java.util.function.Consumer;
 /** Command dispatch owns permission checks; arena services validate all mutations again. */
 public final class CommandManager implements CommandExecutor, TabCompleter {
     private static final List<String> PLAYER_COMMANDS = List.of("join", "leave", "list", "info", "stats", "history", "match", "top", "admin");
-    private static final List<String> ADMIN_COMMANDS = List.of("create", "delete", "setplayer", "addplayer", "setmob", "addmob", "clearspawns", "setexit", "setoutsider", "setpos1", "setpos2", "setup", "start", "stop", "forcewave", "reload", "status", "enable", "economy", "payouts", "reconcile", "npc");
+    private static final List<String> ADMIN_COMMANDS = List.of("create", "delete", "setplayer", "addplayer", "setmob", "addmob", "clearspawns", "setexit", "setoutsider", "setpos1", "setpos2", "setup", "start", "stop", "forcewave", "reload", "status", "enable", "economy", "payouts", "reconcile", "npc", "website");
     private final SimpleMobArena plugin;
     private final ArenaMenu menu;
 
@@ -182,10 +182,12 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         requirePermission(sender, "mobarena.admin." + action);
         switch (action) {
             case "npc" -> npc(sender,args);
+            case "website" -> website(sender,args);
             case "reload" -> {
                 plugin.getArenaManager().reloadArenas();
                 success(sender, "Configuration and arenas reloaded.");
                 message(sender, "Check the console and /ma admin economy for validation errors.");
+                message(sender, "Website export and storage settings take effect after a server restart.");
             }
             case "economy" -> message(sender, plugin.getEconomyService().status());
             case "payouts" -> {
@@ -429,6 +431,43 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
             default -> throw new IllegalArgumentException("Usage: /ma admin npc <create [name]|bind <id>|unbind <id>|list>");
         }
     }
+
+    private void website(CommandSender sender, String[] args) {
+        requireArgs(args, 3, "/ma admin website <status|backfill|retry <event UUID>>");
+        switch (args[2].toLowerCase(Locale.ROOT)) {
+            case "status" -> {
+                requireExactArgs(args, 3, "/ma admin website status");
+                reply(sender, plugin.getEconomyService().websiteStatus(), status -> {
+                    var queue = status.queue();
+                    message(sender, "Website export: " + (status.paused() ? "PAUSED" : "RUNNING")
+                            + " | configured enabled: " + status.enabled() + " | source: " + queue.sourceId());
+                    message(sender, "Pending: " + queue.pending() + " | quarantined: " + queue.quarantined()
+                            + " | backfill: " + (queue.backfillActive() ? "active" : "idle"));
+                    String age = queue.oldestPendingAt() == null ? "none"
+                            : Math.max(0, java.time.Duration.between(queue.oldestPendingAt(), java.time.Instant.now()).getSeconds()) + "s";
+                    message(sender, "Oldest pending: " + age + " | last committed acknowledgement: " + queue.lastAcknowledgedAt());
+                    String failure = status.failureCode() != null ? status.failureCode() : queue.lastFailure();
+                    if (failure != null && !failure.isBlank()) warning(sender, "Last export diagnostic: " + failure
+                            + " | event: " + queue.lastFailureEventId());
+                    message(sender, "Queued events are only delivered after a valid website acknowledgement is saved.");
+                });
+            }
+            case "backfill" -> {
+                requireExactArgs(args, 3, "/ma admin website backfill");
+                reply(sender, plugin.getEconomyService().websiteBackfill(), ignored -> success(sender,
+                        "Historical match export queued in resumable batches. Check /ma admin website status for progress."));
+            }
+            case "retry" -> {
+                requireExactArgs(args, 4, "/ma admin website retry <event UUID>");
+                UUID event = parseUuid(args[3]);
+                reply(sender, plugin.getEconomyService().websiteRetry(event), retried -> {
+                    if (retried) success(sender, "Website event " + event + " queued for another attempt with its original bytes. This does not retry a payout.");
+                    else warning(sender, "Event cannot be retried: it is delivered, unknown, or has invalid source data. Inspect the retained event and diagnostic.");
+                });
+            }
+            default -> throw new IllegalArgumentException("Usage: /ma admin website <status|backfill|retry <event UUID>>");
+        }
+    }
     private static void requireArgs(String[] args, int count, String usage) { if (args.length < count) throw new IllegalArgumentException("Usage: " + usage); }
     private static void requireExactArgs(String[] args, int count, String usage) { if (args.length != count) throw new IllegalArgumentException("Usage: " + usage); }
     private static Player requirePlayer(CommandSender sender) { if (sender instanceof Player player) return player; throw new IllegalArgumentException("This action requires an in-game player."); }
@@ -444,6 +483,8 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
             if (!sender.hasPermission("mobarena.admin." + args[1].toLowerCase(Locale.ROOT))) return List.of();
             if (args[1].equalsIgnoreCase("npc")) return args.length == 3
                 ? matches(List.of("create","bind","unbind","list"),args[2]) : List.of();
+            if (args[1].equalsIgnoreCase("website")) return args.length == 3
+                ? matches(List.of("status","backfill","retry"),args[2]) : List.of();
             if (args.length == 4 && args[1].equalsIgnoreCase("enable")) return matches(List.of("true", "false"), args[3]);
             if (args.length == 4 && args[1].equalsIgnoreCase("reconcile")) return matches(List.of("CONFIRM", "VOID"), args[3]);
             if (args.length == 4 && args[1].equalsIgnoreCase("clearspawns")) return matches(List.of("player", "mob", "all"), args[3]);

@@ -59,6 +59,7 @@ permissions:
       mobarena.admin.payouts: true
       mobarena.admin.reconcile: true
       mobarena.admin.npc: true
+      mobarena.admin.website: true
   mobarena.admin.create:
     default: op
   mobarena.admin.delete:
@@ -103,4 +104,7 @@ permissions:
     default: op
   mobarena.admin.npc:
     description: Create and link Citizens NPCs to the arena selection menu.
+    default: op
+  mobarena.admin.website:
+    description: Inspect website export, backfill matches and retry retained HTTP events.
     default: op

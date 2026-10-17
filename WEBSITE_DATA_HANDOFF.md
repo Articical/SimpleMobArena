@@ -1,6 +1,6 @@
 # Mineplay SimpleMobArena — website data and API handoff
 
-Verified against plugin **1.0.5**, ledger schema **3**, on **17 October 2026**.
+Updated for plugin **1.0.6**, ledger schema **4**, on **17 October 2026**. Source match/payout semantics below remain unchanged. The durable publisher is now implemented; see [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md) for the current configuration, commands and recovery contract. The PostgreSQL DDL and queries below are design examples; the website repository owns its deployed schema and importer.
 
 ## Brief for the website Codex instance
 
@@ -9,17 +9,17 @@ Build the website around this flow:
 ```text
 Paper / SimpleMobArena
   └─ authoritative plugin ledger: SQLite OR MySQL
-       └─ durable export queue + authenticated HTTPS publisher [to be implemented]
-            └─ website ingestion API [to be implemented]
+       └─ durable export queue + authenticated HTTPS publisher [plugin 1.0.6]
+            └─ website ingestion API [website-owned deployment]
                  └─ website PostgreSQL database
                       └─ player profiles, leaderboards, recent matches and match detail pages
 ```
 
 The website retains its own PostgreSQL copy. It does not query the Minecraft database on every page request, and PostgreSQL does not replace the plugin's SQLite/MySQL backend. The plugin remains responsible for match results, reward eligibility, payments and reconciliation. The website stores and presents those results.
 
-**Implemented today:** the source tables, reporting views, match/per-player statistics and payment state machine described below.
+**Implemented in the plugin:** the source tables, reporting views, match/per-player statistics, payment state machine, transactional export snapshots/revisions, durable delivery queue, authenticated HTTPS publisher, retry/quarantine handling and resumable backfill.
 
-**Proposed contract, not implemented today:** the HTTP endpoint, JSON envelope, export revisions, website delivery queue and PostgreSQL tables in this document. Plugin 1.0.5 does not publish HTTP events or have a PostgreSQL driver. A separate plugin change is needed to connect the live server to the website. The website can implement this contract and develop against the example payload meanwhile.
+**Integration boundary:** the plugin targets the website's v1 full-snapshot contract at `https://www.mineplay.co.uk/api/integrations/simple-mob-arena/v1/match-snapshots`. Export is disabled by default until its stable source UUID and bearer credential are registered. It has no PostgreSQL driver: the website owns PostgreSQL persistence. This document's original schema/query examples are illustrative; the website's `SnapshotContract.cs`, `SnapshotValidator.cs` and importer are the receiver authority. Deployment and live end-to-end acceptance are separate from plugin implementation.
 
 Required website features:
 
@@ -106,7 +106,8 @@ The source database does not enforce a composite settlement-to-participant forei
 
 - **settlement_audit:** append-only transition evidence: id (auto-increment), settlement_id (nullable reference), event_at, actor, event and detail. Actor can identify an administrator. This is operational evidence, not a public event API. Omit raw actor/detail from website ingestion.
 - **equipment_snapshots:** player_uuid primary key, unique recovery token, choice, original inventory blob, nullable restore_target blob, status, created_at and updated_at. Status is PREPARED, RESTORING or CONFIRMED. This is recovery state, not historical per-match kit data; a later join can replace a confirmed row. Do not export inventory blobs or recovery tokens.
-- **mobarena_schema:** MySQL schema-version metadata, keyed by component; ledger is version 3 and equipment is version 1. SQLite keeps the equivalent versions in each database's PRAGMA user_version.
+- **mobarena_schema:** MySQL schema-version metadata, keyed by component; ledger is version 4 and equipment is version 1. SQLite keeps the equivalent versions in each database's PRAGMA user_version.
+- **website_export_state**, **website_match_revisions**, **website_export_events:** schema 4 source identity, monotonically increasing match revisions, exact UTF-8 snapshots and durable delivery/backfill state. These are internal publisher records, not additional payload fields; see [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md).
 - **mobarena_migration_guard:** operational guard used by the offline storage migration tool; not website data.
 
 ### Physical types and existing reporting views
@@ -158,17 +159,17 @@ The default minimums are three completed team waves, 60 seconds of individual pa
 - Show a stored name on historical match pages. For a profile label, use the most recently observed historical name or a separately verified current name. UUID identity must survive renames.
 - Payout history is a list of settlements, not an additional sum of each processing/retry/audit event.
 
-### Data not directly recorded in schema 3
+### Gameplay data not directly recorded in schema 4
 
 There are no stored per-player elimination waves, exit reasons/timestamps, death counts, selected classes, mob-type kill breakdowns, per-wave results, survivor lists, explicit victory flag, arena display-name snapshot, configured maximum waves, historical mob-health settings, or per-match plugin/server version.
 
 starting_player_count is not an explicit column. For normal current matches it can be derived from roster size: lobby departures are removed, late joins are disallowed, and post-start departures stay in the roster. Treat this as a derived roster count, with unknown/null provenance for anomalous/imported data rather than inventing an exact historical snapshot.
 
-There is no live-match HTTP feed and no ledger updated_at, source-server ID, export revision or export cursor. Equipment updated_at is unrelated to match synchronization.
+There is no live-match HTTP feed or match ledger updated_at column. Schema 4 stores source identity, export revisions and the backfill cursor in separate website export tables. Equipment updated_at is unrelated to match synchronization.
 
-## 3. Proposed API contract
+## 3. API contract
 
-Everything in this section is a contract to implement, not an existing endpoint.
+Plugin 1.0.6 implements this v1 snapshot contract against the website receiver. [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md) describes its configuration and stricter validation/bounds. Website deployment remains separately managed.
 
 ### Transport
 
@@ -187,7 +188,7 @@ New envelope fields:
 | schema_version | Integer 1. Reject unsupported versions explicitly. |
 | event_type | Literal "match.snapshot". |
 | event_id | UUID generated once and persisted with the export event; unchanged across retries. |
-| source_id | Stable integration/server UUID. New exporter metadata, not a source ledger field today. |
+| source_id | Stable integration/server UUID, persisted in schema 4 website_export_state. |
 | match_revision | Positive 64-bit integer encoded as a decimal string, monotonically increasing per source/match. New exporter metadata. |
 | observed_at | UTC time this snapshot was captured from committed source state. Not match finish or actual payment time. |
 | match | Source-derived object shown below. |
@@ -283,15 +284,15 @@ Successful response, HTTP 200:
 
 result is applied, duplicate or stale. Use 400/422 for invalid data, 401/403 for authentication/authorization, and 409 for identity/revision conflicts. Retry network failures, 429 and 5xx with bounded exponential backoff/jitter; honor Retry-After. Keep rejected events and report the problem rather than silently dropping them or looping rapidly.
 
-### Exporter work needed on the plugin side
+### Implemented plugin exporter
 
-Add a separate durable SQL website export queue and per-match revision state. Enqueue a versioned, allowlisted snapshot **in the same transaction** as each relevant ledger mutation: initial prepare, claim/cap recheck, payment completion, recovery to UNCERTAIN and administrative reconciliation. Capture consistent parent/participant/settlement state; do not construct a snapshot from unrelated reads that straddle a payment update.
+Schema 4 adds a separate durable SQL website export queue and per-match revision state. With capture enabled, a versioned, allowlisted snapshot is enqueued **in the same transaction** as each relevant ledger mutation: initial prepare, claim/cap recheck, payment completion, recovery to UNCERTAIN and administrative reconciliation. Parent/participant/settlement data is read consistently within that transaction.
 
 The existing settlement-outbox is removed after SQL preparation and contains no later payment transitions. It must not be repurposed or deleted in response to website delivery. Likewise, the internal audit table is not a published replay contract.
 
-Send HTTP in background work with timeouts, never on the Paper server thread. A website outage must delay reporting rather than block gameplay, equipment recovery or payments. Retain export events until committed acknowledgement and expose queue age/failures to administrators. Coalescing is optional only if the revision/idempotency guarantees remain intact.
+HTTP delivery runs on a dedicated background worker with timeouts, separate from the ledger worker and Paper server thread. Events are retained, acknowledgements committed, and queue age/failures exposed through `/ma admin website status`. The publisher does not coalesce events or wait for HTTP inside a ledger transaction.
 
-Backfill old SQL matches through this same snapshot protocol, serialized with normal mutations so a confirmation cannot race ahead of its initial revision. Preserve source identity, revision state and pending website deliveries across SQLite/MySQL migration. The current offline StorageMigration copies a fixed set of tables and needs extending for these new tables.
+Backfill uses this same snapshot protocol in resumable batches serialized with normal mutations. Offline StorageMigration now copies and verifies source identity, revision state, exact event payload bytes and delivery/backfill metadata across SQLite/MySQL migration. The source must already be upgraded to schema 4; see [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md) for the upgrade and ownership procedure.
 
 Do not synchronize only WHERE finished_at > last_seen: payments and unallocated_pot can change long after that time. Do not order by payment status or equipment updated_at. A deliberate source database rollback/replacement needs an explicit resynchronization/fencing process; reusing lower revisions would leave the website ahead of the restored ledger.
 
@@ -479,4 +480,4 @@ Repository-relative implementation references:
 - src/cloud/mineplay/mobarena/equipment/SnapshotStore.java — private recovery data.
 - src/cloud/mineplay/mobarena/storage/StorageMigration.java — existing offline SQLite/MySQL migration; not HTTP synchronization.
 
-This handoff documents existing data and proposes an integration contract. It does not deploy an API, change the plugin's storage backend, provision PostgreSQL, or prove end-to-end delivery. Implement and test the importer and publisher together before relying on the website as a current reporting mirror.
+This handoff documents source data and the original reporting design. Plugin 1.0.6 implements the publisher described in [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md). Neither document deploys the website, changes the plugin's storage backend, provisions PostgreSQL, or proves live end-to-end delivery. Validate the deployed importer and publisher together before relying on the website as a current reporting mirror.

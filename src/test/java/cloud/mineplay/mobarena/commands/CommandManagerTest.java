@@ -104,6 +104,29 @@ class CommandManagerTest {
         assertEquals(java.util.List.of("status"), commands.onTabComplete(sender, null, "ma", new String[]{"admin", ""}));
     }
 
+    @Test void websiteAdministrationRequiresPermissionBeforeAccessingTheLedger() {
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "website", "backfill"});
+        verify(sender).hasPermission("mobarena.admin.website");
+        verify(plugin, never()).getEconomyService();
+        assertEquals(List.of(), commands.onTabComplete(sender, null, "ma", new String[]{"admin", "website", ""}));
+    }
+
+    @Test void websiteBackfillAndEventRetryDispatchAsynchronousOperationsOnly() {
+        when(sender.hasPermission("mobarena.admin.website")).thenReturn(true);
+        EconomyService economy = mock(EconomyService.class);
+        when(plugin.getEconomyService()).thenReturn(economy);
+        when(economy.websiteBackfill()).thenReturn(new CompletableFuture<>());
+        UUID event = UUID.randomUUID();
+        when(economy.websiteRetry(event)).thenReturn(new CompletableFuture<>());
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "website", "backfill"});
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "website", "retry", event.toString()});
+        verify(economy).websiteBackfill();
+        verify(economy).websiteRetry(event);
+        verify(economy, never()).reconcile(any(), anyString(), anyString());
+        assertEquals(List.of("backfill", "retry", "status"),
+                commands.onTabComplete(sender, null, "ma", new String[]{"admin", "website", ""}));
+    }
+
     @Test void replaceAndAddSpawnsDispatchToDistinctManagerOperations() {
         ArenaManager manager = mock(ArenaManager.class);
         when(plugin.getArenaManager()).thenReturn(manager);

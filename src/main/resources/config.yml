@@ -12,6 +12,24 @@ storage:
     password-env: ''
     use-ssl: true
 
+website-export:
+  # Configure once, then restart. /ma admin reload does not replace this worker.
+  enabled: false
+  endpoint: 'https://www.mineplay.co.uk/api/integrations/simple-mob-arena/v1/match-snapshots'
+  # Generate a new UUID for THIS ledger and register the same value on the website.
+  # Once persisted, preserve it across restarts, backups and storage migrations.
+  source-id: ''
+  # Set a random 32..1024-character bearer credential in the Paper process environment.
+  # Register the matching credential on the website. Never put it in a command or URL.
+  token-env: MINEPLAY_ARENA_INGESTION_TOKEN
+  connect-timeout-seconds: 5
+  request-timeout-seconds: 15
+  retry-base-seconds: 5
+  retry-max-seconds: 3600
+  poll-interval-seconds: 5
+  batch-size: 10
+  concurrency: 1
+
 equipment:
   mode: BOTH # PERSONAL, CLASS, BOTH
   personal:

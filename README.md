@@ -14,7 +14,7 @@ Install a Java 25 JDK, set `JAVA_HOME`, then run:
 .\gradlew.bat clean build
 ```
 
-On Linux/macOS use `sh ./gradlew clean build`. Build output is `build/libs/SimpleMobArena-1.0.5.jar`. This single JAR contains SQLite JDBC, its native libraries and MySQL Connector/J; do not deploy compiled files from the old Eclipse `bin` directory. Tests are in `src/test/java` and reports in `build/reports/tests/test/index.html`.
+On Linux/macOS use `sh ./gradlew clean build`. Build output is `build/libs/SimpleMobArena-1.0.6.jar`. This single JAR contains SQLite JDBC, its native libraries, MySQL Connector/J and Gson; do not deploy compiled files from the old Eclipse `bin` directory. Tests are in `src/test/java` and reports in `build/reports/tests/test/index.html`.
 
 The existing `src/cloud/mineplay/mobarena` source layout and the `Arena` / `ArenaManager` concepts are retained. Resources live in `src/main/resources`. SQLite and all runtime dependencies are packaged by the `jar` task; the Paper API and Vault economy are supplied by the server.
 
@@ -262,13 +262,13 @@ storage:
     use-ssl: true
 ```
 
-Create the database and dedicated plugin account beforehand; the plugin creates/version-controls its tables and reporting views. Set the password environment variable in the server process environment. When `password-env` is nonempty it must exist; otherwise the `password` field is used. Credentials are never included in loggable settings. `use-ssl: true` requires a trusted certificate matching the host (`VERIFY_IDENTITY`), not merely encryption. Use a read-only account for a future website, not the plugin's writer credentials.
+Create the database and dedicated plugin account beforehand; the plugin creates/version-controls its tables and reporting views. Set the password environment variable in the server process environment. When `password-env` is nonempty it must exist; otherwise the `password` field is used. Credentials are never included in loggable settings. `use-ssl: true` requires a trusted certificate matching the host (`VERIFY_IDENTITY`), not merely encryption. The website receives authenticated HTTPS snapshots and does not need the plugin's database credentials.
 
 Storage is selected at startup. Stop the server before changing it. Changing the YAML alone does not copy existing records; migrate first to retain statistics, reward caps, cooldowns, payout history and outstanding equipment recovery. One plugin server instance must own each backend; this is not a coordinated cross-server match system.
 
 ### Offline migration
 
-The `migrateStorage` Gradle task copies between selected backends, including SQLite to MySQL, MySQL to SQLite and file-to-file copies. It requires a completely empty destination, preserves the source, and includes the equipment snapshots and audit records. Keep both the server and any other database writer stopped for the entire operation.
+The `migrateStorage` Gradle task copies between selected backends, including SQLite to MySQL, MySQL to SQLite and file-to-file copies. It requires a completely empty destination, preserves the source, and includes equipment snapshots, audit records, website source identity, revisions, exact queued payload bytes and delivery/backfill metadata. First upgrade the source to ledger schema 4 by running this plugin with website export disabled, then stop it. Keep both the server and any other database writer/publisher stopped for the entire migration.
 
 1. Stop Paper cleanly and back up the complete plugin directory and matching player data.
 2. Create source and target copies of the full `config.yml` with their respective `storage` sections. Do not switch the server's active configuration yet.
@@ -285,7 +285,9 @@ Do not use migration to merge nonempty databases. If it fails, durable migration
 
 ### Reporting and match history
 
-For a website that receives data through an API and retains it in PostgreSQL, give its implementation agent [WEBSITE_DATA_HANDOFF.md](WEBSITE_DATA_HANDOFF.md). It documents the current stored data and a proposed API/import schema, clearly separating existing plugin functionality from the publisher and website work still required.
+Plugin 1.0.6 includes a durable HTTPS publisher for `https://www.mineplay.co.uk/api/integrations/simple-mob-arena/v1/match-snapshots`. See [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md) for source/token setup, admin commands, retry behavior, backfill, thread boundaries and restore procedures. Export defaults to disabled until the website's source ID and credential are configured. The website retains its own PostgreSQL copy; the plugin remains on SQLite or MySQL.
+
+Give the website implementation agent both [WEBSITE_DATA_HANDOFF.md](WEBSITE_DATA_HANDOFF.md), which describes source data and reporting semantics, and [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md), which describes the implemented publisher. `/ma admin website status`, `backfill` and `retry <event UUID>` require `mobarena.admin.website`. Export SQL runs on the ledger worker and HTTP delivery on a separate bounded worker; website outages do not wait inside payment transactions.
 
 The SQL views `mobarena_leaderboard`, `mobarena_match_performance` and `mobarena_player_payout_history` expose reporting data for a future website. Use player UUIDs as identity; recorded names are labels. Intended payouts and confirmed earnings are separate. Only CONFIRMED payments count as earned money. Do not sum every intended settlement regardless of state, and do not use binary floating point for website money calculations. The leaderboard exposes confirmed earnings in integer minor units for aggregation.
 

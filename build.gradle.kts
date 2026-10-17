@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "cloud.mineplay"
-version = "1.0.5"
+version = "1.0.6"
 
 val mockitoAgent = configurations.create("mockitoAgent")
 
@@ -35,6 +35,7 @@ dependencies {
     compileOnly("me.clip:placeholderapi:2.12.3")
     implementation("org.xerial:sqlite-jdbc:3.53.4.0")
     implementation("com.mysql:mysql-connector-j:26.7.0")
+    implementation("com.google.code.gson:gson:2.14.0")
     testImplementation(platform("org.junit:junit-bom:5.13.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")

@@ -3,6 +3,9 @@ package cloud.mineplay.mobarena.economy;
 import cloud.mineplay.mobarena.storage.SettlementStore;
 import cloud.mineplay.mobarena.storage.DatabaseSettings;
 import cloud.mineplay.mobarena.storage.SettlementOutbox;
+import cloud.mineplay.mobarena.storage.WebsiteExportStore;
+import cloud.mineplay.mobarena.website.WebsiteExportSettings;
+import cloud.mineplay.mobarena.website.WebsitePublisher;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -45,6 +48,13 @@ public final class EconomyService implements AutoCloseable {
     private final AtomicBoolean pumping = new AtomicBoolean();
     private final BukkitTask pumpTask;
     private final BukkitTask reconnectTask;
+    private final BukkitTask websiteBackfillTask;
+    private final WebsiteExportSettings websiteSettings;
+    private final PublisherFactory publisherFactory;
+    private final AtomicBoolean backfilling = new AtomicBoolean();
+    private volatile WebsitePublisher websitePublisher;
+    private volatile boolean websiteBackfillActive;
+    private volatile String websiteError;
     private volatile EconomySettings settings = EconomySettings.defaults();
     private volatile String configurationError;
     private volatile String ledgerError;
@@ -55,20 +65,37 @@ public final class EconomyService implements AutoCloseable {
     }
 
     EconomyService(JavaPlugin plugin, VaultGateway gateway, StoreFactory storeFactory) {
+        this(plugin, gateway, storeFactory, null, WebsitePublisher::new);
+    }
+
+    EconomyService(JavaPlugin plugin, VaultGateway gateway, StoreFactory storeFactory,
+                   WebsiteExportSettings suppliedWebsiteSettings, PublisherFactory publisherFactory) {
         this.plugin = plugin;
         logger = plugin.getLogger();
         scheduler = plugin.getServer().getScheduler();
         this.gateway = gateway;
         this.storeFactory = storeFactory;
+        this.publisherFactory = publisherFactory;
         notifications = new SettlementNotifier(plugin, () -> closing);
         database = DatabaseSettings.load(plugin.getConfig().getConfigurationSection("storage"), plugin.getDataFolder().toPath());
         outbox = new SettlementOutbox(plugin.getDataFolder().toPath().resolve("settlement-outbox"));
+        WebsiteExportSettings exportSettings;
+        try {
+            exportSettings = suppliedWebsiteSettings != null ? suppliedWebsiteSettings
+                    : WebsiteExportSettings.load(plugin.getConfig().getConfigurationSection("website-export"));
+        } catch (IllegalArgumentException error) {
+            exportSettings = WebsiteExportSettings.disabled();
+            websiteError = safeWebsiteCode(error, "CONFIG_INVALID");
+            logger.warning("Website export paused: " + websiteError + ". Correct website-export configuration and restart.");
+        }
+        websiteSettings = exportSettings;
         initialize(null);
         reload(plugin.getConfig().getConfigurationSection("economy"));
         pumpTask = scheduler.runTaskTimer(plugin, this::pump, 20L, 20L);
         reconnectTask = scheduler.runTaskTimer(plugin, () -> {
             if (!closing && ledgerError != null && ready.isDone() && !pumping.get()) initialize(ready);
         }, 600L, 600L);
+        websiteBackfillTask = scheduler.runTaskTimer(plugin, this::pumpWebsiteBackfill, 40L, 40L);
     }
 
     public boolean reload(ConfigurationSection section) {
@@ -138,6 +165,99 @@ public final class EconomyService implements AutoCloseable {
             } catch (Exception error) { throw new CompletionException(error); }
         });
     }
+
+    /** Administrative reads and mutations enqueue SQL work; callers never wait on the server thread. */
+    public CompletableFuture<WebsiteStatus> websiteStatus() {
+        return submit(store -> {
+            try {
+                WebsitePublisher publisher = websitePublisher;
+                String code = websiteError != null ? websiteError : publisher == null ? null : publisher.lastFailureCode();
+                return new WebsiteStatus(store.websiteStatus(), websiteSettings.enabled(),
+                        websiteError != null || publisher == null || publisher.paused(), code);
+            } catch (Exception error) { throw websiteFailure(); }
+        });
+    }
+
+    public CompletableFuture<Void> websiteBackfill() {
+        if (!websiteSettings.enabled() || websiteError != null)
+            return CompletableFuture.failedFuture(new IllegalStateException("Website export must be configured and enabled before backfill."));
+        return submit(store -> {
+            try {
+                store.websiteStartBackfill(Instant.now());
+                websiteBackfillActive = true;
+                return null;
+            } catch (Exception error) { throw websiteFailure(); }
+        });
+    }
+
+    public CompletableFuture<Boolean> websiteRetry(UUID eventId) {
+        if (!websiteSettings.enabled() || websiteError != null)
+            return CompletableFuture.failedFuture(new IllegalStateException("Website export must be configured and enabled before retry."));
+        return submit(store -> {
+            try {
+                boolean changed = store.websiteRetry(eventId, Instant.now());
+                WebsitePublisher publisher = websitePublisher;
+                if (changed && publisher != null) publisher.resume();
+                return changed;
+            } catch (Exception error) { throw websiteFailure(); }
+        });
+    }
+
+    private void pumpWebsiteBackfill() {
+        if (closing || !websiteBackfillActive || websiteError != null || ledgerError != null
+                || !ready.isDone() || !backfilling.compareAndSet(false, true)) return;
+        submit(store -> {
+            try { return store.websiteBackfillBatch(25, Instant.now()); }
+            catch (Exception error) { throw websiteFailure(); }
+        }).whenComplete((processed, error) -> {
+            backfilling.set(false);
+            if (error != null) {
+                websiteBackfillActive = false;
+                logger.warning("Website backfill paused: BACKFILL_STORAGE_FAILURE. Its durable cursor is retained; restart or request backfill to resume.");
+            } else if (processed == 0) websiteBackfillActive = false;
+        });
+    }
+
+    private synchronized void startWebsitePublisher() {
+        if (closing || !websiteSettings.enabled() || websiteError != null || websitePublisher != null) return;
+        try {
+            websitePublisher = publisherFactory.create(websiteSettings, new WebsitePublisher.Ledger() {
+                @Override public CompletableFuture<List<WebsiteExportStore.Event>> events(Instant now, int limit) {
+                    return submit(store -> {
+                        try { return store.websiteEvents(now, limit); } catch (Exception error) { throw websiteFailure(); }
+                    });
+                }
+                @Override public CompletableFuture<Void> delivered(UUID eventId, long revision, Instant now) {
+                    return submit(store -> {
+                        try { store.websiteDelivered(eventId, revision, now); return null; }
+                        catch (Exception error) { throw websiteFailure(); }
+                    });
+                }
+                @Override public CompletableFuture<Void> failed(UUID eventId, String code, Instant nextAttempt, boolean quarantine) {
+                    return submit(store -> {
+                        try { store.websiteFailed(eventId, code, nextAttempt, quarantine); return null; }
+                        catch (Exception error) { throw websiteFailure(); }
+                    });
+                }
+            });
+            websitePublisher.start();
+        } catch (RuntimeException error) {
+            websiteError = "PUBLISHER_START_FAILED";
+            logger.warning("Website export paused: " + websiteError);
+        }
+    }
+
+    private static CompletionException websiteFailure() {
+        // JDBC diagnostics may contain connection details: export status exposes a bounded code only.
+        return new CompletionException(new IllegalStateException("WEBSITE_STORAGE_FAILURE"));
+    }
+
+    private static String safeWebsiteCode(Exception error, String fallback) {
+        String code = error.getMessage();
+        return code != null && code.matches("[A-Z0-9_]{1,80}") ? code : fallback;
+    }
+
+    public record WebsiteStatus(WebsiteExportStore.Status queue, boolean enabled, boolean paused, String failureCode) { }
 
     public String status() {
         if (ledgerError != null) return "Payouts stopped: ledger error: " + ledgerError;
@@ -213,6 +333,14 @@ public final class EconomyService implements AutoCloseable {
             try {
                 if (previous != null && !previous.isCompletedExceptionally()) previous.join().close();
                 opened = storeFactory.open(database);
+                try {
+                    opened.configureWebsiteExport(websiteSettings.enabled(), websiteSettings.sourceId(), Instant.now());
+                    if (websiteSettings.enabled()) websiteBackfillActive = opened.websiteStatus().backfillActive();
+                } catch (IllegalArgumentException error) {
+                    websiteError = safeWebsiteCode(error, "SOURCE_CONFIGURATION_FAILED");
+                    opened.configureWebsiteExport(false, null, Instant.now());
+                    logger.warning("Website export paused: " + websiteError + ". Existing source identity and queued events are retained.");
+                }
                 int recovered = opened.recover(Instant.now());
                 if (recovered > 0) logger.warning("Recovered " + recovered + " UNCERTAIN payments. Verify provider records before reconciliation.");
                 for (SettlementOutbox.Entry entry : outbox.entries()) {
@@ -228,7 +356,10 @@ public final class EconomyService implements AutoCloseable {
                 throw new CompletionException(exception);
             }
         }, worker);
-        ready.whenComplete((store, error) -> { if (error != null) failLedger(error); });
+        ready.whenComplete((store, error) -> {
+            if (error != null) failLedger(error);
+            else startWebsitePublisher();
+        });
     }
 
     private void failLedger(Throwable error) {
@@ -239,11 +370,17 @@ public final class EconomyService implements AutoCloseable {
 
     @FunctionalInterface
     interface StoreFactory { SettlementStore open(DatabaseSettings settings) throws Exception; }
+    @FunctionalInterface
+    interface PublisherFactory { WebsitePublisher create(WebsiteExportSettings settings, WebsitePublisher.Ledger ledger); }
 
     @Override public void close() {
         closing = true;
+        synchronized (this) {
+            if (websitePublisher != null) websitePublisher.close();
+        }
         pumpTask.cancel();
         reconnectTask.cancel();
+        websiteBackfillTask.cancel();
         // Drain local handoffs before shutting down SQL, even when its connection is stalled.
         outboxWriter.shutdown();
         try {
