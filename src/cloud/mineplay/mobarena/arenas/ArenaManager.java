@@ -2,6 +2,7 @@ package cloud.mineplay.mobarena.arenas;
 
 import cloud.mineplay.mobarena.SimpleMobArena;
 import cloud.mineplay.mobarena.config.ArenaDefinition;
+import cloud.mineplay.mobarena.messages.ArenaMessages;
 import java.io.*;
 import java.util.*;
 import net.kyori.adventure.text.Component;
@@ -35,10 +36,13 @@ public final class ArenaManager {
             arenas.put(id,new Arena(plugin,definition));
         }
         for (Arena a : arenas.values()) {
-            for (Arena b : arenas.values()) if (a != b && a.definition().enabled && b.definition().enabled && a.definition().overlaps(b.definition()))
+            for (Arena b : arenas.values()) if (a != b && b.definition().enabled && a.definition().overlaps(b.definition()))
                 a.definition().errors.add("Boundary overlaps enabled arena "+b.getId());
             for (Arena b : arenas.values()) if (b.definition().enabled && b.contains(a.definition().exit))
                 a.definition().errors.add("Exit is inside enabled arena "+b.getId());
+            Location outsiderExit = ArenaDefinition.read(a.getConfiguration().getString("outsider-exit"));
+            for (Arena b : arenas.values()) if (a != b && b.definition().enabled && b.contains(outsiderExit))
+                a.definition().errors.add("Outsider exit is inside enabled arena "+b.getId()+". Use /ma admin setoutsider "+a.getId()+" exit to share the normal exit.");
             for (String error : a.getValidationErrors()) plugin.getLogger().warning("Arena "+a.getId()+": "+error);
         }
     }
@@ -78,11 +82,11 @@ public final class ArenaManager {
             try { arena.joined(player); }
             catch (RuntimeException e) {
                 release(playerId); plugin.getEquipmentService().restore(player,arena.definition().exit,() -> {});
-                player.sendMessage(Component.text("[MobArena] "+e.getMessage()));
+                player.sendMessage(ArenaMessages.error(e.getMessage()));
             }
         },message -> {
             if (preparing.remove(playerId)) arena.releaseReservation();
-            release(playerId); player.sendMessage(Component.text("[MobArena] "+message));
+            release(playerId); player.sendMessage(ArenaMessages.error(message));
         });
     }
     public void leave(Player player) {
@@ -121,7 +125,7 @@ public final class ArenaManager {
         if (exit == null || at(exit) != null || !ArenaDefinition.safe(exit)) exit = arena.definition().exit;
         if (exit == null) return;
         player.leaveVehicle();
-        if (player.teleport(exit)) player.sendMessage(Component.text("[MobArena] This arena is reserved for match participants."));
+        if (player.teleport(exit)) player.sendMessage(ArenaMessages.warning("This arena is reserved for match participants. You have been moved to its exit."));
         else player.kick(Component.text("Arena exit teleport was blocked. Rejoin outside the active arena."));
     }
     public void create(String id) {
@@ -141,14 +145,40 @@ public final class ArenaManager {
     public void setLocation(String id,String key,Location location) {
         ensureIdle(); Arena a = required(id); YamlConfiguration c = a.getConfiguration();
         if (!Set.of("player-spawns","mob-spawns","exit","pos1","pos2","outsider-exit").contains(key)) throw new IllegalArgumentException("Unknown location key.");
-        if (key.endsWith("-spawns")) { List<String> list = new ArrayList<>(c.getStringList(key)); list.add(ArenaDefinition.write(location)); c.set(key,list); }
+        checkLocation(location);
+        if (key.endsWith("-spawns")) c.set(key,List.of(ArenaDefinition.write(location)));
         else c.set(key,ArenaDefinition.write(location));
         if (key.equals("pos1")) c.set("world",location.getWorld().getName());
         save(a.getId(),c); loadArenas();
     }
+    public void addSpawn(String id,String key,Location location) {
+        ensureIdle(); Arena a = required(id); YamlConfiguration c = a.getConfiguration();
+        if (!Set.of("player-spawns","mob-spawns").contains(key)) throw new IllegalArgumentException("Choose player-spawns or mob-spawns.");
+        checkLocation(location);
+        List<String> list = new ArrayList<>(c.getStringList(key));
+        String value = ArenaDefinition.write(location);
+        if (!list.contains(value)) list.add(value);
+        c.set(key,list); save(a.getId(),c); loadArenas();
+    }
+    public void clearSpawns(String id,String type) {
+        ensureIdle(); Arena a = required(id); YamlConfiguration c = a.getConfiguration();
+        if (!Set.of("player","mob","all").contains(type)) throw new IllegalArgumentException("Choose player, mob or all.");
+        if (!type.equals("mob")) c.set("player-spawns",List.of());
+        if (!type.equals("player")) c.set("mob-spawns",List.of());
+        save(a.getId(),c); loadArenas();
+    }
+    public void useExitForOutsiders(String id) {
+        ensureIdle(); Arena a = required(id);
+        a.getConfiguration().set("outsider-exit",null);
+        save(a.getId(),a.getConfiguration()); loadArenas();
+    }
+    private static void checkLocation(Location location) {
+        if (location == null || location.getWorld() == null) throw new IllegalArgumentException("Stand in a loaded world to set a location.");
+        location.checkFinite();
+    }
     public void setEnabled(String id,boolean enabled) {
         ensureIdle(); Arena a = required(id);
-        if (enabled && !a.getValidationErrors().isEmpty()) throw new IllegalStateException(String.join("; ",a.getValidationErrors()));
+        if (enabled && !a.getValidationErrors().isEmpty()) throw new IllegalStateException("Arena setup has "+a.getValidationErrors().size()+" issue(s). Use /ma admin setup "+a.getId()+" for locations and fixes.");
         a.getConfiguration().set("enabled",enabled); save(a.getId(),a.getConfiguration()); loadArenas();
     }
     public void reloadArenas() {

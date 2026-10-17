@@ -3,9 +3,14 @@ package cloud.mineplay.mobarena.events;
 import cloud.mineplay.mobarena.SimpleMobArena;
 import cloud.mineplay.mobarena.arenas.Arena;
 import cloud.mineplay.mobarena.arenas.ArenaManager;
+import cloud.mineplay.mobarena.config.ArenaDefinition;
 import cloud.mineplay.mobarena.enums.GameState;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.NamespacedKey;
+import org.bukkit.World;
 import org.bukkit.command.PluginCommand;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.*;
 import org.bukkit.event.entity.*;
 import org.bukkit.event.player.*;
@@ -14,9 +19,12 @@ import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.BundleMeta;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.persistence.PersistentDataContainer;
+import org.bukkit.persistence.PersistentDataType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -40,6 +48,7 @@ class ArenaListenerTest {
         player = mock(Player.class);
         playerId = UUID.randomUUID();
         when(plugin.getArenaManager()).thenReturn(manager);
+        when(plugin.getConfig()).thenReturn(new YamlConfiguration());
         when(player.getUniqueId()).thenReturn(playerId);
         when(player.getHealth()).thenReturn(4.0);
         when(manager.getPlayerArena(playerId)).thenReturn(arena);
@@ -144,6 +153,153 @@ class ArenaListenerTest {
         EntityDamageByEntityEvent event = hit(player,survivalMob,8);
         listener.damage(event);
         assertTrue(event.isCancelled());
+    }
+
+    @Test void ownedZombieDrownedAndSkeletonFamiliesCannotIgniteFromSunlight() {
+        for (Class<? extends LivingEntity> type : List.of(Zombie.class, Drowned.class, Husk.class,
+                Skeleton.class, Stray.class, WitherSkeleton.class)) {
+            LivingEntity mob = mock(type);
+            when(manager.owner(mob)).thenReturn(arena);
+            EntityCombustEvent event = new EntityCombustEvent(mob, 8.0F);
+
+            listener.sunlight(event);
+
+            assertTrue(event.isCancelled(), type.getSimpleName() + " sunlight must be blocked");
+            verify(mob).setFireTicks(0);
+        }
+    }
+
+    @Test void unownedUndeadKeepNormalSunlightBehavior() {
+        for (Class<? extends LivingEntity> type : List.of(Zombie.class, Drowned.class, Skeleton.class)) {
+            LivingEntity mob = mock(type);
+            EntityCombustEvent event = new EntityCombustEvent(mob, 8.0F);
+
+            listener.sunlight(event);
+
+            assertFalse(event.isCancelled());
+            verify(mob, never()).setFireTicks(anyInt());
+        }
+    }
+
+    @Test void playersAndOtherArenaEntitiesAreNotGivenSunlightCombustionImmunity() {
+        for (LivingEntity entity : List.of(player, mock(Chicken.class), mock(Spider.class))) {
+            when(manager.owner(entity)).thenReturn(arena);
+            EntityCombustEvent event = new EntityCombustEvent(entity, 8.0F);
+
+            listener.sunlight(event);
+
+            assertFalse(event.isCancelled());
+            verify(entity, never()).setFireTicks(anyInt());
+        }
+    }
+
+    @Test void ownedUndeadRetainBlockAndEntityIgnition() {
+        for (Class<? extends LivingEntity> type : List.of(Zombie.class, Drowned.class, Skeleton.class)) {
+            LivingEntity mob = mock(type);
+            when(manager.owner(mob)).thenReturn(arena);
+            // A missing block source is legal for combustion; its event subtype still matters.
+            EntityCombustByBlockEvent blockFire = new EntityCombustByBlockEvent(null, mob, 8.0F);
+            EntityCombustByEntityEvent attackFire = new EntityCombustByEntityEvent(player, mob, 8.0F);
+
+            listener.sunlight(blockFire);
+            listener.sunlight(attackFire);
+
+            assertFalse(blockFire.isCancelled());
+            assertFalse(attackFire.isCancelled());
+            verify(mob, never()).setFireTicks(anyInt());
+        }
+    }
+
+    @Test void unrelatedMobsCannotSpawnInIdleOrOccupiedEnabledArenas() {
+        Location location = new Location(mock(World.class), 5, 65, 5);
+        when(manager.at(location)).thenReturn(arena);
+        for (boolean occupied : List.of(false, true)) {
+            when(manager.occupied(arena)).thenReturn(occupied);
+            for (CreatureSpawnEvent.SpawnReason reason : List.of(CreatureSpawnEvent.SpawnReason.NATURAL,
+                    CreatureSpawnEvent.SpawnReason.CUSTOM, CreatureSpawnEvent.SpawnReason.SPAWNER_EGG,
+                    CreatureSpawnEvent.SpawnReason.EGG, CreatureSpawnEvent.SpawnReason.SPAWNER)) {
+                Zombie mob = spawnMob(Zombie.class, location, null);
+                CreatureSpawnEvent event = new CreatureSpawnEvent(mob, reason);
+
+                listener.spawn(event);
+
+                assertTrue(event.isCancelled(), reason + " must be blocked with occupied=" + occupied);
+                verify(mob, never()).remove();
+            }
+        }
+    }
+
+    @Test void ownCurrentSessionMobsAndJockeyMountsCanSpawnWithoutOverridingOtherPlugins() {
+        Location location = new Location(mock(World.class), 5, 65, 5);
+        Arena destination = new Arena(plugin, mock(ArenaDefinition.class));
+        when(manager.at(location)).thenReturn(destination);
+        when(manager.occupied(destination)).thenReturn(true);
+        for (Class<? extends Mob> type : List.of(Zombie.class, Chicken.class)) {
+            Mob mob = spawnMob(type, location, destination.getSessionId().toString());
+            CreatureSpawnEvent event = new CreatureSpawnEvent(mob, CreatureSpawnEvent.SpawnReason.CUSTOM);
+
+            listener.spawn(event);
+
+            assertFalse(event.isCancelled(), type.getSimpleName() + " belongs to this match");
+            event.setCancelled(true);
+            listener.spawn(event);
+            assertTrue(event.isCancelled(), "Another plugin's cancellation must remain in force");
+        }
+    }
+
+    @Test void staleOrOtherArenaSessionTagsCannotBypassSpawnProtection() {
+        Location location = new Location(mock(World.class), 5, 65, 5);
+        Arena destination = new Arena(plugin, mock(ArenaDefinition.class));
+        Arena otherArena = new Arena(plugin, mock(ArenaDefinition.class));
+        when(manager.at(location)).thenReturn(destination);
+        when(manager.occupied(destination)).thenReturn(true);
+        for (String session : List.of(UUID.randomUUID().toString(), otherArena.getSessionId().toString())) {
+            Zombie mob = spawnMob(Zombie.class, location, session);
+            CreatureSpawnEvent event = new CreatureSpawnEvent(mob, CreatureSpawnEvent.SpawnReason.CUSTOM);
+
+            listener.spawn(event);
+
+            assertTrue(event.isCancelled());
+        }
+    }
+
+    @Test void spawnsOutsideEnabledArenaBoundariesKeepNormalBehavior() {
+        // ArenaManager.at returns null both outside every arena and inside a disabled arena.
+        Location location = new Location(mock(World.class), 50, 65, 50);
+        for (CreatureSpawnEvent.SpawnReason reason : List.of(CreatureSpawnEvent.SpawnReason.NATURAL,
+                CreatureSpawnEvent.SpawnReason.CUSTOM, CreatureSpawnEvent.SpawnReason.SPAWNER_EGG)) {
+            Zombie mob = spawnMob(Zombie.class, location, null);
+            CreatureSpawnEvent event = new CreatureSpawnEvent(mob, reason);
+
+            listener.spawn(event);
+
+            assertFalse(event.isCancelled());
+            verify(mob, never()).remove();
+        }
+    }
+
+    private <T extends Mob> T spawnMob(Class<T> type, Location location, String session) {
+        T mob = mock(type);
+        NamespacedKey key = new NamespacedKey("simplemobarena", "session");
+        when(plugin.sessionKey()).thenReturn(key);
+        when(mob.getLocation()).thenReturn(location);
+        PersistentDataContainer data = mock(PersistentDataContainer.class);
+        when(mob.getPersistentDataContainer()).thenReturn(data);
+        when(data.get(key, PersistentDataType.STRING)).thenReturn(session);
+        when(data.has(key, PersistentDataType.STRING)).thenReturn(session != null);
+        return mob;
+    }
+
+    @Test void arenaSpawnProtectionDoesNotBlockDecorativeArmorStands() {
+        Location location = new Location(mock(World.class), 5, 65, 5);
+        when(manager.at(location)).thenReturn(arena);
+        ArmorStand decoration = mock(ArmorStand.class);
+        when(decoration.getLocation()).thenReturn(location);
+        CreatureSpawnEvent event = new CreatureSpawnEvent(decoration, CreatureSpawnEvent.SpawnReason.CUSTOM);
+
+        listener.spawn(event);
+
+        assertFalse(event.isCancelled());
     }
 
     @Test void voluntaryDisconnectIsDelegatedToTheSameLeaveFlow() {

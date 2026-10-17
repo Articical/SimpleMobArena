@@ -20,11 +20,43 @@ equipment:
   # No-transfer, no-drop and no-block-edit rules are mandatory for class safety.
   # Normal personal durability and consumables are spent by default.
 
+announcements:
+  # false keeps that event's chat inside the arena. Sounds are always participant-only.
+  public:
+    join: true
+    start: true
+    end: true
+  # Countdown titles are always participant-only; legacy public.countdown is ignored.
+  # The initial positive countdown is always shown once, followed by these milestones.
+  # [] disables subsequent countdown titles/cues. Values must be integers from 1 to 600.
+  countdown-seconds: [30, 15, 10, 5, 3, 2, 1]
+
+sounds:
+  enabled: true
+  # Each cue can be disabled or use a client/resource-pack sound key.
+  # Volume: 0..2; pitch: 0.5..2. Existing installations use these defaults automatically.
+  join: {enabled: true, sound: 'minecraft:block.note_block.pling', volume: 0.55, pitch: 1.2}
+  countdown: {enabled: true, sound: 'minecraft:block.note_block.hat', volume: 0.5, pitch: 1.2}
+  match-start: {enabled: true, sound: 'minecraft:block.note_block.bell', volume: 0.7, pitch: 1.0}
+  wave-start: {enabled: true, sound: 'minecraft:block.note_block.chime', volume: 0.6, pitch: 1.1}
+  wave-complete: {enabled: true, sound: 'minecraft:entity.experience_orb.pickup', volume: 0.7, pitch: 1.2}
+  mob-kill: {enabled: true, sound: 'minecraft:entity.experience_orb.pickup', volume: 0.4, pitch: 1.7}
+  eliminated: {enabled: true, sound: 'minecraft:block.note_block.bass', volume: 0.7, pitch: 0.7}
+  match-end: {enabled: true, sound: 'minecraft:entity.player.levelup', volume: 0.7, pitch: 1.0}
+  cancelled: {enabled: true, sound: 'minecraft:block.note_block.didgeridoo', volume: 0.5, pitch: 0.8}
+
 waves:
   base-mobs: 5
   mobs-per-wave-per-player: 1
   health-increase-percent: 20
   health-increase-every-waves: 5
+  # Mob count and health use the players who started the match, even after eliminations.
+  # This health multiplier stacks with wave growth, mob variants and arena difficulty.
+  # Older configs use these defaults automatically. Solo health is unchanged.
+  player-health-scaling:
+    enabled: true
+    additional-player-multiplier: 0.15 # +15% health per player beyond the first.
+    maximum-multiplier: 2.5
   max-active-mobs: 100 # Includes chicken mounts. Each rider is one kill.
   max-mobs-per-wave: 500
   max-waves: 30
@@ -36,6 +68,9 @@ waves:
   # Slots choose one alternative from the cumulative probabilities below.
   # Remaining probability means an empty slot. All drops and XP are suppressed.
   # Undead have sunlight burning disabled through Paper's API (not helmets).
+  # Creepers and drowned are excluded; legacy sections are ignored when loading.
+  # Waves 1-2 are melee-only. Ranged-capable types have a minimum unlock of 3,
+  # including legacy configurations; later configured unlock waves are retained.
   mobs:
     ZOMBIE:
       unlock-wave: 1
@@ -56,7 +91,7 @@ waves:
         chest:
           - {material: LEATHER_CHESTPLATE, chance: 0.12}
     SKELETON:
-      unlock-wave: 1
+      unlock-wave: 3
       weight: 18
       health-multiplier: 1.0
       equipment:
@@ -71,17 +106,6 @@ waves:
       unlock-wave: 1
       weight: 10
       health-multiplier: 1.1
-    DROWNED:
-      unlock-wave: 2
-      weight: 12
-      health-multiplier: 1.1
-      baby-chance: 0.06
-      equipment:
-        hand:
-          - {material: TRIDENT, chance: 0.18}
-          - {material: STONE_SWORD, chance: 0.22}
-        off_hand:
-          - {material: SHIELD, chance: 0.06}
     HUSK:
       unlock-wave: 3
       weight: 9
@@ -92,10 +116,6 @@ waves:
           - {material: STONE_AXE, chance: 0.25}
         off_hand:
           - {material: SHIELD, chance: 0.10}
-    CREEPER:
-      unlock-wave: 3
-      weight: 5
-      health-multiplier: 1.0
     STRAY:
       unlock-wave: 5
       weight: 8

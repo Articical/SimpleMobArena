@@ -3,17 +3,27 @@ package cloud.mineplay.mobarena.commands;
 import cloud.mineplay.mobarena.SimpleMobArena;
 import cloud.mineplay.mobarena.arenas.Arena;
 import cloud.mineplay.mobarena.arenas.ArenaManager;
+import cloud.mineplay.mobarena.config.ArenaDefinition;
 import cloud.mineplay.mobarena.economy.EconomyService;
+import cloud.mineplay.mobarena.integration.CitizensArenaNpc;
+import cloud.mineplay.mobarena.messages.ArenaMessages;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.World;
 import org.bukkit.command.CommandSender;
+import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.PluginManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
+import org.mockito.ArgumentCaptor;
 
 import java.util.UUID;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -92,5 +102,240 @@ class CommandManagerTest {
     @Test void administrativeCompletionOnlyOffersAuthorizedActions() {
         when(sender.hasPermission("mobarena.admin.status")).thenReturn(true);
         assertEquals(java.util.List.of("status"), commands.onTabComplete(sender, null, "ma", new String[]{"admin", ""}));
+    }
+
+    @Test void replaceAndAddSpawnsDispatchToDistinctManagerOperations() {
+        ArenaManager manager = mock(ArenaManager.class);
+        when(plugin.getArenaManager()).thenReturn(manager);
+        Player player = mock(Player.class);
+        when(player.hasPermission(anyString())).thenReturn(true);
+        World world = mock(World.class);
+        when(world.getName()).thenReturn("world");
+        Location spot = new Location(world, 2.5, 181, 3.5);
+        when(player.getLocation()).thenReturn(spot);
+
+        commands.onCommand(player, null, "ma", new String[]{"admin", "setplayer", "spawn"});
+        commands.onCommand(player, null, "ma", new String[]{"admin", "setmob", "spawn"});
+        commands.onCommand(player, null, "ma", new String[]{"admin", "addplayer", "spawn"});
+        commands.onCommand(player, null, "ma", new String[]{"admin", "addmob", "spawn"});
+
+        verify(manager).setLocation("spawn", "player-spawns", spot);
+        verify(manager).setLocation("spawn", "mob-spawns", spot);
+        verify(manager).addSpawn("spawn", "player-spawns", spot);
+        verify(manager).addSpawn("spawn", "mob-spawns", spot);
+        verifyNoMoreInteractions(manager);
+    }
+
+    @Test void newSpawnActionsRequireTheirOwnPermissionsBeforeMutation() {
+        for (String action : List.of("addplayer", "addmob", "clearspawns", "setup")) {
+            commands.onCommand(sender, null, "ma", new String[]{"admin", action, "spawn", "all"});
+            verify(sender).hasPermission("mobarena.admin." + action);
+        }
+        verify(plugin, never()).getArenaManager();
+    }
+
+    @Test void clearingSpawnsChecksChoiceAndExactArgumentCount() {
+        ArenaManager manager = mock(ArenaManager.class);
+        when(plugin.getArenaManager()).thenReturn(manager);
+        when(sender.hasPermission("mobarena.admin.clearspawns")).thenReturn(true);
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "clearspawns", "spawn"});
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "clearspawns", "spawn", "wrong"});
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "clearspawns", "spawn", "all", "extra"});
+        verifyNoInteractions(manager);
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "clearspawns", "spawn", "ALL"});
+        verify(manager).clearSpawns("spawn", "all");
+    }
+
+    @Test void consoleCanResetOutsidersToExitWithoutAPlayerLocation() {
+        ArenaManager manager = mock(ArenaManager.class);
+        when(plugin.getArenaManager()).thenReturn(manager);
+        when(sender.hasPermission("mobarena.admin.setoutsider")).thenReturn(true);
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "setoutsider", "spawn", "EXIT"});
+        verify(manager).useExitForOutsiders("spawn");
+        verify(manager, never()).setLocation(anyString(), anyString(), any());
+    }
+
+    @Test void unknownOutsiderModeCannotOverwriteSavedLocation() {
+        when(sender.hasPermission("mobarena.admin.setoutsider")).thenReturn(true);
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "setoutsider", "spawn", "wrong"});
+        verify(plugin, never()).getArenaManager();
+        verify(sender).sendMessage(ArenaMessages.error("Usage: /ma admin setoutsider <arena> [exit]"));
+    }
+
+    @Test void setupShowsHeightBoundsExistingSpawnsAndActionableRepairs() {
+        World world = mock(World.class);
+        when(world.getName()).thenReturn("world");
+        bukkit.when(() -> Bukkit.getWorld("world")).thenReturn(world);
+        YamlConfiguration config = new YamlConfiguration();
+        config.set("world", "world");
+        config.set("pos1", "world,10,180,10");
+        config.set("pos2", "world,30,190,30");
+        config.set("player-spawns", List.of("world,0.5,181,0.5"));
+        config.set("mob-spawns", List.of("world,10.5,181,10.5", "world,-10.5,181,-10.5"));
+        config.set("outsider-exit", "world,15,181,15");
+        ArenaDefinition definition = new ArenaDefinition("spawn", config, new YamlConfiguration());
+        Arena arena = mock(Arena.class);
+        when(arena.getId()).thenReturn("spawn");
+        when(arena.definition()).thenReturn(definition);
+        when(arena.getValidationErrors()).thenReturn(definition.errors);
+        ArenaManager manager = mock(ArenaManager.class);
+        when(plugin.getArenaManager()).thenReturn(manager);
+        when(manager.getArena("spawn")).thenReturn(arena);
+        when(sender.hasPermission("mobarena.admin.setup")).thenReturn(true);
+
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "setup", "spawn"});
+
+        ArgumentCaptor<Component> output = ArgumentCaptor.forClass(Component.class);
+        verify(sender, atLeastOnce()).sendMessage(output.capture());
+        List<String> lines = output.getAllValues().stream().map(PlainTextComponentSerializer.plainText()::serialize).toList();
+        assertTrue(lines.stream().anyMatch(line -> line.contains("Y 180..190")));
+        assertTrue(lines.stream().anyMatch(line -> line.contains("Mob spawns: 2")));
+        assertTrue(lines.stream().anyMatch(line -> line.contains("Player #1: world 0.5, 181, 0.5")));
+        assertTrue(lines.stream().anyMatch(line -> line.contains("Player spawn #1") && line.contains("/ma admin setplayer spawn to replace this spawn list")));
+        assertTrue(lines.stream().anyMatch(line -> line.contains("Mob spawn #2") && line.contains("/ma admin setmob spawn to replace this spawn list")));
+        assertTrue(lines.stream().anyMatch(line -> line.contains("/ma admin setoutsider spawn exit")));
+        assertEquals(definition.errors.size(), lines.stream().filter(line -> line.contains("Needs fix:")).count());
+        assertEquals(1, lines.stream().filter(line -> line.contains("/ma admin setplayer spawn")).count());
+        assertEquals(1, lines.stream().filter(line -> line.contains("/ma admin setoutsider spawn exit")).count());
+        assertTrue(lines.stream().noneMatch(line -> line.contains("Stand safely INSIDE")), "Actionable validation errors should not get duplicate repair hints");
+        verify(sender).sendMessage(ArenaMessages.warning("Check again with /ma admin setup spawn. Enable only when it says Ready."));
+    }
+
+    @Test void createConfirmsTheChangeAndKeepsTheSetupInstruction() {
+        ArenaManager manager = mock(ArenaManager.class);
+        when(plugin.getArenaManager()).thenReturn(manager);
+        when(sender.hasPermission("mobarena.admin.create")).thenReturn(true);
+
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "create", "castle"});
+
+        verify(manager).create("castle");
+        verify(sender).sendMessage(ArenaMessages.success("Created castle. The arena is disabled until setup is complete."));
+        verify(sender).sendMessage(ArenaMessages.info("Set both boundary corners, then use /ma admin setup castle."));
+    }
+
+    @Test void invalidJoinKeepsTheFullUsageAsAnError() {
+        Player player = mock(Player.class);
+        when(player.hasPermission("mobarena.join")).thenReturn(true);
+
+        commands.onCommand(player, null, "ma", new String[]{"join"});
+
+        verify(plugin, never()).getArenaManager();
+        verify(player).sendMessage(ArenaMessages.error("Usage: /ma join <arena> [personal|class]"));
+    }
+
+    @Test void setupArgumentCompletionOffersOnlySupportedModesWithPermission() {
+        assertTrue(commands.onTabComplete(sender, null, "ma", new String[]{"admin", "clearspawns", "spawn", ""}).isEmpty());
+        when(sender.hasPermission("mobarena.admin.clearspawns")).thenReturn(true);
+        when(sender.hasPermission("mobarena.admin.setoutsider")).thenReturn(true);
+        assertEquals(List.of("all", "mob", "player"), commands.onTabComplete(sender, null, "ma", new String[]{"admin", "clearspawns", "spawn", ""}));
+        assertEquals(List.of("exit"), commands.onTabComplete(sender, null, "ma", new String[]{"admin", "setoutsider", "spawn", "e"}));
+    }
+
+    @Test void npcOperationsRequirePermissionBeforeAccessingTheIntegration() {
+        for (String operation : List.of("create", "bind", "unbind", "list"))
+            commands.onCommand(sender, null, "ma", new String[]{"admin", "npc", operation, "7"});
+
+        verify(sender, times(4)).hasPermission("mobarena.admin.npc");
+        verify(plugin, never()).getCitizensArenaNpc();
+        verify(sender, times(4)).sendMessage(ArenaMessages.error("Missing permission: mobarena.admin.npc"));
+    }
+
+    @Test void permittedPlayerCanCreateDefaultAndMultiwordNamedNpcs() {
+        CitizensArenaNpc integration = mock(CitizensArenaNpc.class);
+        when(plugin.getCitizensArenaNpc()).thenReturn(integration);
+        Player player = mock(Player.class);
+        when(player.hasPermission("mobarena.admin.npc")).thenReturn(true);
+        when(integration.create(player, "MobArena")).thenReturn("Created MobArena NPC 1.");
+        when(integration.create(player, "Arena Guide")).thenReturn("Created Arena Guide NPC 2.");
+
+        commands.onCommand(player, null, "ma", new String[]{"admin", "npc", "create"});
+        commands.onCommand(player, null, "ma", new String[]{"admin", "npc", "CREATE", "Arena", "Guide"});
+
+        verify(integration).create(player, "MobArena");
+        verify(integration).create(player, "Arena Guide");
+        verifyNoMoreInteractions(integration);
+        verify(player).sendMessage(ArenaMessages.success("Created MobArena NPC 1."));
+        verify(player).sendMessage(ArenaMessages.success("Created Arena Guide NPC 2."));
+    }
+
+    @Test void npcCreationRequiresAnInGamePlayerEvenWithPermission() {
+        CitizensArenaNpc integration = mock(CitizensArenaNpc.class);
+        when(plugin.getCitizensArenaNpc()).thenReturn(integration);
+        when(sender.hasPermission("mobarena.admin.npc")).thenReturn(true);
+
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "npc", "create", "Arena", "Guide"});
+
+        verifyNoInteractions(integration);
+        verify(sender).sendMessage(ArenaMessages.error("This action requires an in-game player."));
+    }
+
+    @Test void invalidNpcIdsAndArgumentCountsCannotMutateBindings() {
+        CitizensArenaNpc integration = mock(CitizensArenaNpc.class);
+        when(plugin.getCitizensArenaNpc()).thenReturn(integration);
+        when(sender.hasPermission("mobarena.admin.npc")).thenReturn(true);
+        List<String[]> invalid = List.of(
+            new String[]{"admin", "npc"},
+            new String[]{"admin", "npc", "bind"},
+            new String[]{"admin", "npc", "bind", "3", "extra"},
+            new String[]{"admin", "npc", "unbind"},
+            new String[]{"admin", "npc", "unbind", "3", "extra"},
+            new String[]{"admin", "npc", "list", "extra"},
+            new String[]{"admin", "npc", "delete", "3"});
+        for (String[] args : invalid) commands.onCommand(sender, null, "ma", args);
+        for (String id : List.of("-1", "not-a-number", "2147483648", "1.5"))
+            for (String operation : List.of("bind", "unbind"))
+                commands.onCommand(sender, null, "ma", new String[]{"admin", "npc", operation, id});
+
+        verifyNoInteractions(integration);
+        verify(sender, times(8)).sendMessage(ArenaMessages.error("Enter a non-negative Citizens NPC id."));
+    }
+
+    @Test void consoleCanBindZeroUnbindAndListNpcBindings() {
+        CitizensArenaNpc integration = mock(CitizensArenaNpc.class);
+        when(plugin.getCitizensArenaNpc()).thenReturn(integration);
+        when(sender.hasPermission("mobarena.admin.npc")).thenReturn(true);
+        when(integration.bind(0)).thenReturn("NPC 0 linked.");
+        when(integration.unbind(17)).thenReturn("NPC 17 unlinked.");
+        when(integration.bindings()).thenReturn(List.of("NPC 0: Arena Guide", "NPC 42: Dungeon Guide"));
+
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "npc", "BIND", "0"});
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "npc", "unbind", "17"});
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "npc", "list"});
+
+        verify(integration).bind(0);
+        verify(integration).unbind(17);
+        verify(integration).bindings();
+        verifyNoMoreInteractions(integration);
+        verify(sender).sendMessage(ArenaMessages.success("NPC 0 linked."));
+        verify(sender).sendMessage(ArenaMessages.success("NPC 17 unlinked."));
+        verify(sender).sendMessage(ArenaMessages.info("NPC 0: Arena Guide"));
+        verify(sender).sendMessage(ArenaMessages.info("NPC 42: Dungeon Guide"));
+    }
+
+    @Test void emptyNpcBindingListExplainsHowToCreateOrBindOne() {
+        CitizensArenaNpc integration = mock(CitizensArenaNpc.class);
+        when(plugin.getCitizensArenaNpc()).thenReturn(integration);
+        when(sender.hasPermission("mobarena.admin.npc")).thenReturn(true);
+        when(integration.bindings()).thenReturn(List.of());
+
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "npc", "list"});
+
+        verify(integration).bindings();
+        verifyNoMoreInteractions(integration);
+        verify(sender).sendMessage(ArenaMessages.info("No arena menu NPCs are linked. Use /ma admin npc create or /ma admin npc bind <id>."));
+    }
+
+    @Test void npcCompletionOffersOnlyAuthorizedOperationsWithoutAccessingBindings() {
+        assertTrue(commands.onTabComplete(sender, null, "ma", new String[]{"admin", "np"}).isEmpty());
+        assertTrue(commands.onTabComplete(sender, null, "ma", new String[]{"admin", "npc", ""}).isEmpty());
+        when(sender.hasPermission("mobarena.admin.npc")).thenReturn(true);
+
+        assertEquals(List.of("admin"), commands.onTabComplete(sender, null, "ma", new String[]{"adm"}));
+        assertEquals(List.of("npc"), commands.onTabComplete(sender, null, "ma", new String[]{"admin", "np"}));
+        assertEquals(List.of("bind", "create", "list", "unbind"), commands.onTabComplete(sender, null, "ma", new String[]{"admin", "npc", ""}));
+        assertEquals(List.of("unbind"), commands.onTabComplete(sender, null, "ma", new String[]{"admin", "npc", "UN"}));
+        assertTrue(commands.onTabComplete(sender, null, "ma", new String[]{"admin", "npc", "bind", ""}).isEmpty());
+        verify(plugin, never()).getCitizensArenaNpc();
+        verify(plugin, never()).getArenaManager();
     }
 }

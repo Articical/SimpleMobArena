@@ -1,6 +1,7 @@
 package cloud.mineplay.mobarena.equipment;
 
 import cloud.mineplay.mobarena.storage.DatabaseSettings;
+import cloud.mineplay.mobarena.messages.ArenaMessages;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
@@ -289,7 +290,7 @@ public final class EquipmentService implements Listener {
         if (!locked.contains(player.getUniqueId()) && !visit.restoreRequested) return;
         locked.add(player.getUniqueId());
         if (visit.writing || visit.restoring) return;
-        player.sendMessage("[MobArena] Recovering your saved equipment. Please wait.");
+        player.sendMessage(ArenaMessages.info("Restoring your saved equipment. Please wait."));
         // Re-read after an ambiguous I/O failure: the commit may have succeeded even
         // though its completion did not reach the previous online Player instance.
         visit.writing = true;
@@ -311,7 +312,7 @@ public final class EquipmentService implements Listener {
                     Player current = Bukkit.getPlayer(player.getUniqueId());
                     if (current == null || !current.isOnline()) return;
                     restore(current, null, () -> {
-                        if (current.isOnline()) current.sendMessage("[MobArena] Your equipment has been recovered.");
+                        if (current.isOnline()) current.sendMessage(ArenaMessages.success("Your equipment has been restored."));
                     });
                 });
             } catch (Exception exception) {
@@ -377,7 +378,7 @@ public final class EquipmentService implements Listener {
     private void quarantine(Player player, String reason, Exception exception) {
         locked.add(player.getUniqueId());
         plugin.getLogger().log(Level.SEVERE, reason + " for " + player.getUniqueId() + "; original snapshot retained", exception);
-        if (player.isOnline()) player.sendMessage("[MobArena] Equipment recovery needs administrator attention. Your saved items are retained; interaction is paused.");
+        if (player.isOnline()) player.sendMessage(ArenaMessages.error("Equipment recovery needs an administrator. Your saved items are retained; interaction is paused."));
     }
     static String carriedInventoryError(Player player) {
         if (!PlayerSnapshot.empty(player.getItemOnCursor())) return "Put the item on your cursor away before joining.";

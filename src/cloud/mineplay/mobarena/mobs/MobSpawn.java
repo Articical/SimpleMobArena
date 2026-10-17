@@ -11,13 +11,16 @@ import org.bukkit.inventory.*;
 public final class MobSpawn {
     private MobSpawn() {}
     public static boolean roll(double chance) { return ThreadLocalRandom.current().nextDouble() < chance; }
+    public static void protectFromSunlight(Mob mob) {
+        if (mob instanceof Zombie zombie) zombie.setShouldBurnInDay(false);
+        if (mob instanceof AbstractSkeleton skeleton) skeleton.setShouldBurnInDay(false);
+    }
     public static void equip(Mob mob, ConfigurationSection config) {
+        protectFromSunlight(mob);
         if (mob instanceof Zombie zombie) {
-            zombie.setShouldBurnInDay(false);
             zombie.setBaby(roll(config == null ? 0 : config.getDouble("baby-chance",0)));
             zombie.setCanBreakDoors(false);
         }
-        if (mob instanceof AbstractSkeleton skeleton) skeleton.setShouldBurnInDay(false);
         EntityEquipment equipment = mob.getEquipment();
         if (equipment == null) return;
         equipment.clear();
@@ -43,6 +46,7 @@ public final class MobSpawn {
         List<String> errors = new ArrayList<>();
         if (mobs == null) return List.of("waves.mobs is missing.");
         for (String type : mobs.getKeys(false)) {
+            if ("CREEPER".equalsIgnoreCase(type) || "DROWNED".equalsIgnoreCase(type)) continue; // Legacy rules are no longer active.
             ConfigurationSection config = mobs.getConfigurationSection(type);
             if (config == null) continue;
             for (String key : List.of("baby-chance","chicken-jockey-chance")) {

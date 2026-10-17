@@ -3,6 +3,7 @@ package cloud.mineplay.mobarena.gui;
 import cloud.mineplay.mobarena.SimpleMobArena;
 import cloud.mineplay.mobarena.arenas.Arena;
 import cloud.mineplay.mobarena.commands.CommandManager;
+import cloud.mineplay.mobarena.messages.ArenaMessages;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
@@ -95,7 +96,7 @@ public final class ArenaMenu implements Listener {
                     case HISTORY -> player.performCommand("mobarena history");
                 }
             } catch (IllegalArgumentException | IllegalStateException ex) {
-                player.sendMessage(Component.text("[MobArena] " + ex.getMessage(), NamedTextColor.RED));
+                player.sendMessage(ArenaMessages.error(ex.getMessage()));
             }
         });
     }

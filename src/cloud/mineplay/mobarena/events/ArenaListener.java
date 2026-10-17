@@ -4,6 +4,7 @@ import cloud.mineplay.mobarena.SimpleMobArena;
 import cloud.mineplay.mobarena.arenas.*;
 import cloud.mineplay.mobarena.enums.GameState;
 import cloud.mineplay.mobarena.gui.ArenaMenu;
+import cloud.mineplay.mobarena.messages.ArenaMessages;
 import java.util.*;
 import org.bukkit.*;
 import org.bukkit.entity.*;
@@ -18,7 +19,6 @@ import org.bukkit.projectiles.ProjectileSource;
 import org.bukkit.event.entity.EntityMountEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.BundleMeta;
-import net.kyori.adventure.text.Component;
 
 /** One registered listener; all progression and cleanup belongs to Arena. */
 public final class ArenaListener implements Listener {
@@ -33,6 +33,16 @@ public final class ArenaListener implements Listener {
         return e;
     }
     private boolean insideOccupied(Location location) { return manager().occupied(manager().at(location)); }
+    @EventHandler(priority=EventPriority.HIGHEST,ignoreCancelled=true)
+    public void sunlight(EntityCombustEvent event) {
+        // Sun ignition uses the base event. Keep fire/lava contact and attack ignition intact.
+        if (event instanceof EntityCombustByBlockEvent || event instanceof EntityCombustByEntityEvent) return;
+        Entity entity = event.getEntity();
+        if ((entity instanceof Zombie || entity instanceof AbstractSkeleton) && manager().owner(entity) != null) {
+            event.setCancelled(true);
+            entity.setFireTicks(0);
+        }
+    }
     @EventHandler(priority=EventPriority.HIGHEST,ignoreCancelled=true)
     public void damage(EntityDamageEvent event) {
         Entity victim = event.getEntity(); Arena victimArena = participant(victim), mobArena = manager().owner(victim);
@@ -106,7 +116,7 @@ public final class ArenaListener implements Listener {
     public void teleport(PlayerTeleportEvent e) {
         Arena a=participant(e.getPlayer());
         if (a!=null && a.isParticipant(e.getPlayer().getUniqueId()) && !a.contains(e.getTo())) {
-            e.setCancelled(true); e.getPlayer().sendMessage(Component.text("[MobArena] Use /ma leave to leave the match.")); return;
+            e.setCancelled(true); e.getPlayer().sendMessage(ArenaMessages.warning("Use /ma leave to leave the match.")); return;
         }
         Arena destination=manager().at(e.getTo());
         if (manager().occupied(destination) && a!=destination) {
@@ -122,7 +132,7 @@ public final class ArenaListener implements Listener {
         if (root.startsWith("simplemobarena:")) root=root.substring("simplemobarena:".length());
         boolean allowed=resolved!=null && resolved.getPlugin()==plugin && (root.equals("ma") || root.equals("mobarena"))
             && (parts.length==1 || Set.of("leave","info","stats","list","history","match","top").contains(parts[1]));
-        if (!allowed) { e.setCancelled(true); e.getPlayer().sendMessage(Component.text("[MobArena] Only match commands are available. Use /ma leave to exit.")); }
+        if (!allowed) { e.setCancelled(true); e.getPlayer().sendMessage(ArenaMessages.warning("Only match commands are available. Use /ma leave to exit.")); }
     }
     @EventHandler(priority=EventPriority.HIGHEST,ignoreCancelled=true)
     public void target(EntityTargetLivingEntityEvent e) {
@@ -180,7 +190,10 @@ public final class ArenaListener implements Listener {
     public void transform(EntityTransformEvent e) { if(manager().owner(e.getEntity())!=null) e.setCancelled(true); }
     @EventHandler(priority=EventPriority.HIGHEST,ignoreCancelled=true)
     public void spawn(CreatureSpawnEvent e) {
-        if(insideOccupied(e.getLocation()) && !e.getEntity().getPersistentDataContainer().has(plugin.sessionKey(),PersistentDataType.STRING)) e.setCancelled(true);
+        if (!(e.getEntity() instanceof Mob)) return;
+        Arena destination = manager().at(e.getLocation());
+        // Enabled arenas stay clear between matches; only this arena's current session may spawn here.
+        if (destination != null && !destination.owns(e.getEntity())) e.setCancelled(true);
     }
     @EventHandler public void loaded(EntitiesLoadEvent e) {
         for(Entity entity:e.getEntities()) if(entity.getPersistentDataContainer().has(plugin.sessionKey(),PersistentDataType.STRING) && manager().owner(entity)==null) entity.remove();

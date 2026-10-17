@@ -4,7 +4,6 @@ import cloud.mineplay.mobarena.storage.SettlementStore;
 import cloud.mineplay.mobarena.storage.DatabaseSettings;
 import cloud.mineplay.mobarena.storage.SettlementOutbox;
 import java.math.BigDecimal;
-import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -28,6 +27,8 @@ public final class EconomyService implements AutoCloseable {
     private final Logger logger;
     private final BukkitScheduler scheduler;
     private final VaultGateway gateway;
+    private final StoreFactory storeFactory;
+    private final SettlementNotifier notifications;
     private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "SimpleMobArena-ledger");
         thread.setDaemon(true);
@@ -50,10 +51,16 @@ public final class EconomyService implements AutoCloseable {
     private volatile boolean closing;
 
     public EconomyService(JavaPlugin plugin) {
+        this(plugin, new VaultGateway(plugin), SettlementStore::new);
+    }
+
+    EconomyService(JavaPlugin plugin, VaultGateway gateway, StoreFactory storeFactory) {
         this.plugin = plugin;
         logger = plugin.getLogger();
         scheduler = plugin.getServer().getScheduler();
-        gateway = new VaultGateway(plugin);
+        this.gateway = gateway;
+        this.storeFactory = storeFactory;
+        notifications = new SettlementNotifier(plugin, () -> closing);
         database = DatabaseSettings.load(plugin.getConfig().getConfigurationSection("storage"), plugin.getDataFolder().toPath());
         outbox = new SettlementOutbox(plugin.getDataFolder().toPath().resolve("settlement-outbox"));
         initialize(null);
@@ -78,6 +85,7 @@ public final class EconomyService implements AutoCloseable {
 
     public BigDecimal waveReward(int wave, int startingPlayers) { return RewardCalculator.waveReward(settings, wave, startingPlayers); }
     public BigDecimal capPot(BigDecimal pot) { return RewardCalculator.capPot(settings, pot); }
+    public EconomySettings rewardSettings() { return effectiveSettings(); }
 
     public CompletableFuture<Void> finish(SessionResult result) {
         EconomySettings snapshot = effectiveSettings();
@@ -91,6 +99,7 @@ public final class EconomyService implements AutoCloseable {
                 // File durability is independent of a blocked remote SQL worker.
                 SettlementStore store = current.join();
                 boolean created = store.prepare(result, snapshot, Instant.now());
+                notifications.prepared(store, result.arenaId(), result.sessionId(), snapshot);
                 outbox.remove(result.sessionId());
                 if (snapshot.auditLogging()) logger.info("Arena settlement " + result.sessionId() + " arena=" + result.arenaId()
                         + " pot=" + result.prizePot() + " cancelled=" + result.cancelled() + " created=" + created);
@@ -144,7 +153,8 @@ public final class EconomyService implements AutoCloseable {
                 || !gateway.available(settings.scale()) || !pumping.compareAndSet(false, true)) return;
         EconomySettings paymentSettings = settings;
         submit(store -> {
-            try { return SettlementPayments.claimNext(store, paymentSettings, true, Instant.now()); }
+            try { return SettlementPayments.claimNext(store, paymentSettings, true, Instant.now(),
+                    id -> notifications.payment(store, id, true)); }
             catch (Exception exception) { throw new CompletionException(exception); }
         }).whenComplete((payment, error) -> {
             if (error != null) { pumping.set(false); failLedger(error); return; }
@@ -167,6 +177,8 @@ public final class EconomyService implements AutoCloseable {
         submit(store -> {
             try {
                 store.complete(payment.settlementId(), outcome.status(), outcome.detail(), Instant.now());
+                notifications.committed(payment.settlementId(), outcome.status());
+                notifications.payment(store, payment.settlementId(), false);
                 if (paymentSettings.auditLogging() || outcome.status() != Settlement.Status.CONFIRMED) {
                     logger.info("Payment " + payment.settlementId() + " player=" + payment.playerId() + " amount="
                             + payment.intendedAmount().toPlainString() + " status=" + outcome.status() + " detail=" + outcome.detail());
@@ -200,11 +212,12 @@ public final class EconomyService implements AutoCloseable {
             SettlementStore opened = null;
             try {
                 if (previous != null && !previous.isCompletedExceptionally()) previous.join().close();
-                opened = new SettlementStore(database);
+                opened = storeFactory.open(database);
                 int recovered = opened.recover(Instant.now());
                 if (recovered > 0) logger.warning("Recovered " + recovered + " UNCERTAIN payments. Verify provider records before reconciliation.");
                 for (SettlementOutbox.Entry entry : outbox.entries()) {
                     opened.prepare(entry.result(), entry.settings(), Instant.now());
+                    notifications.prepared(opened, entry.result().arenaId(), entry.result().sessionId(), entry.settings());
                     outbox.remove(entry.result().sessionId());
                     logger.info("Recovered durable session result " + entry.result().sessionId());
                 }
@@ -223,6 +236,9 @@ public final class EconomyService implements AutoCloseable {
         ledgerError = actual.getClass().getSimpleName() + ": " + actual.getMessage();
         logger.log(Level.SEVERE, "Arena payments stopped to preserve the ledger. Any PROCESSING payments require restart recovery and reconciliation.", actual);
     }
+
+    @FunctionalInterface
+    interface StoreFactory { SettlementStore open(DatabaseSettings settings) throws Exception; }
 
     @Override public void close() {
         closing = true;

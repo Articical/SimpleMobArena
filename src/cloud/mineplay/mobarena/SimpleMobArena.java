@@ -5,6 +5,8 @@ import cloud.mineplay.mobarena.commands.CommandManager;
 import cloud.mineplay.mobarena.economy.EconomyService;
 import cloud.mineplay.mobarena.equipment.EquipmentService;
 import cloud.mineplay.mobarena.events.ArenaListener;
+import cloud.mineplay.mobarena.messages.ArenaMessages;
+import cloud.mineplay.mobarena.integration.CitizensArenaNpc;
 import net.kyori.adventure.text.Component;
 import org.bukkit.*;
 import org.bukkit.event.*;
@@ -19,6 +21,7 @@ public final class SimpleMobArena extends JavaPlugin {
     private EconomyService economyService;
     private ArenaListener arenaListener;
     private AutoCloseable placeholders;
+    private CitizensArenaNpc citizensArenaNpc;
     private NamespacedKey sessionKey;
     private long ticks;
     @Override public void onEnable() {
@@ -38,6 +41,14 @@ public final class SimpleMobArena extends JavaPlugin {
             CommandManager commands = new CommandManager(this);
             java.util.Objects.requireNonNull(getCommand("mobarena")).setExecutor(commands);
             getCommand("mobarena").setTabCompleter(commands);
+            try {
+                citizensArenaNpc = new CitizensArenaNpc(this,commands::openMenu);
+                citizensArenaNpc.start();
+            } catch (Exception | LinkageError optionalFailure) {
+                if (citizensArenaNpc != null) citizensArenaNpc.close();
+                citizensArenaNpc = null;
+                getLogger().log(java.util.logging.Level.WARNING,"Optional Citizens arena menus are unavailable; ordinary arena commands remain usable",optionalFailure);
+            }
             // Nonpersistent tags also allow removal of stragglers saved by another plugin.
             for (World world : getServer().getWorlds()) for (var entity : world.getEntities())
                 if (entity.getPersistentDataContainer().has(sessionKey,PersistentDataType.STRING)) entity.remove();
@@ -61,11 +72,12 @@ public final class SimpleMobArena extends JavaPlugin {
             },this);
             for (var player : getServer().getOnlinePlayers()) player.kick(Component.text("Arena recovery is unavailable. Please wait for an administrator."));
             if (getCommand("mobarena") != null) getCommand("mobarena").setExecutor((sender,command,label,args) -> {
-                sender.sendMessage(Component.text("[MobArena] Recovery-only mode. Check the server log and restore database access, then restart.")); return true;
+                sender.sendMessage(ArenaMessages.error("Recovery-only mode. Check the server log, restore database access, then restart.")); return true;
             });
         }
     }
     @Override public void onDisable() {
+        if (citizensArenaNpc != null) citizensArenaNpc.close();
         if (placeholders != null) try { placeholders.close(); } catch (Exception error) { getLogger().warning("Could not unregister placeholders: "+error.getMessage()); }
         if (arenaManager != null) arenaManager.stopAllArenas();
         if (equipmentService != null) equipmentService.shutdown();
@@ -76,6 +88,7 @@ public final class SimpleMobArena extends JavaPlugin {
     public EquipmentService getEquipmentService() { return equipmentService; }
     public EconomyService getEconomyService() { return economyService; }
     public ArenaListener getArenaListener() { return arenaListener; }
+    public CitizensArenaNpc getCitizensArenaNpc() { return citizensArenaNpc; }
     public NamespacedKey sessionKey() { return sessionKey; }
     public long ticks() { return ticks; }
 }

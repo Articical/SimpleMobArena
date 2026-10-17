@@ -5,7 +5,7 @@ api-version: '26.3'
 description: Cooperative physical arenas with recoverable equipment and audited Vault rewards.
 authors: [Mineplay]
 website: https://github.com/Articical/SimpleMobArena
-softdepend: [Vault, Essentials, WorldGuard, PlaceholderAPI]
+softdepend: [Vault, Essentials, WorldGuard, PlaceholderAPI, Citizens]
 commands:
   mobarena:
     description: Open MobArena or manage participation.
@@ -40,7 +40,10 @@ permissions:
       mobarena.admin.create: true
       mobarena.admin.delete: true
       mobarena.admin.setplayer: true
+      mobarena.admin.addplayer: true
       mobarena.admin.setmob: true
+      mobarena.admin.addmob: true
+      mobarena.admin.clearspawns: true
       mobarena.admin.setexit: true
       mobarena.admin.setoutsider: true
       mobarena.admin.setpos1: true
@@ -50,17 +53,25 @@ permissions:
       mobarena.admin.forcewave: true
       mobarena.admin.reload: true
       mobarena.admin.status: true
+      mobarena.admin.setup: true
       mobarena.admin.enable: true
       mobarena.admin.economy: true
       mobarena.admin.payouts: true
       mobarena.admin.reconcile: true
+      mobarena.admin.npc: true
   mobarena.admin.create:
     default: op
   mobarena.admin.delete:
     default: op
   mobarena.admin.setplayer:
     default: op
+  mobarena.admin.addplayer:
+    default: op
   mobarena.admin.setmob:
+    default: op
+  mobarena.admin.addmob:
+    default: op
+  mobarena.admin.clearspawns:
     default: op
   mobarena.admin.setexit:
     default: op
@@ -80,6 +91,8 @@ permissions:
     default: op
   mobarena.admin.status:
     default: op
+  mobarena.admin.setup:
+    default: op
   mobarena.admin.enable:
     default: op
   mobarena.admin.economy:
@@ -87,4 +100,7 @@ permissions:
   mobarena.admin.payouts:
     default: op
   mobarena.admin.reconcile:
+    default: op
+  mobarena.admin.npc:
+    description: Create and link Citizens NPCs to the arena selection menu.
     default: op
