@@ -285,6 +285,8 @@ Do not use migration to merge nonempty databases. If it fails, durable migration
 
 ### Reporting and match history
 
+For a website that receives data through an API and retains it in PostgreSQL, give its implementation agent [WEBSITE_DATA_HANDOFF.md](WEBSITE_DATA_HANDOFF.md). It documents the current stored data and a proposed API/import schema, clearly separating existing plugin functionality from the publisher and website work still required.
+
 The SQL views `mobarena_leaderboard`, `mobarena_match_performance` and `mobarena_player_payout_history` expose reporting data for a future website. Use player UUIDs as identity; recorded names are labels. Intended payouts and confirmed earnings are separate. Only CONFIRMED payments count as earned money. Do not sum every intended settlement regardless of state, and do not use binary floating point for website money calculations. The leaderboard exposes confirmed earnings in integer minor units for aggregation.
 
 The in-game `/ma history` command shows recent per-player match results and `/ma match` shows a full stored match, including the roster, recorded names, kill/damage contributions, participation time, pot and cancellation reason. Reporting views are read-only interfaces for consumers; write through the plugin's state machines only. The plugin does not create or publish a website.
