@@ -41,8 +41,10 @@ class MySqlStorageIntegrationTest {
                 UUID player = UUID.randomUUID();
                 UUID session = UUID.randomUUID();
                 UUID token = UUID.randomUUID();
+                var duel = DuelStoreTest.result(UUID.randomUUID(), DuelStoreTest.START.plusSeconds(120));
                 double preciseDamage = 123.45678901234567;
                 try (var ledger = new SettlementStore(sqlite); var equipment = new SnapshotStore(sqlite)) {
+                    ledger.recordDuel(duel);
                     ledger.prepare(new SessionResult(session, "roof", start, start.plusSeconds(120), 3, new BigDecimal("123.45"),
                             List.of(new SessionResult.Participant(player, "MySqlPlayer", 10, preciseDamage, 120)), false, "ELIMINATED"), EconomySettings.defaults(), start.plusSeconds(120));
                     var payment = ledger.claim(ledger.pending(1).getFirst().settlementId(), EconomySettings.defaults(), start.plusSeconds(121));
@@ -55,8 +57,12 @@ class MySqlStorageIntegrationTest {
                 var first = StorageMigration.migrate(sqlite, mysql, true);
                 assertEquals(1, first.rows().get("sessions"));
                 assertEquals(3, first.rows().get("website_export_events"));
+                assertEquals(1, first.rows().get("duels"));
+                assertEquals(2, first.rows().get("duel_participants"));
                 assertEquals(originalQueue, StorageMigrationTest.exportData(mysql));
                 try (var ledger = new SettlementStore(mysql); var equipment = new SnapshotStore(mysql)) {
+                    assertEquals(duel, ledger.duelMatch(duel.sessionId()));
+                    assertFalse(ledger.recordDuel(duel));
                     assertEquals("MySqlPlayer", ledger.match(session).participants().getFirst().playerName());
                     assertEquals(Double.doubleToRawLongBits(preciseDamage), Double.doubleToRawLongBits(ledger.match(session).participants().getFirst().damage()));
                     RewardCalculatorTest.assertMoney("123.45", ledger.stats(player).earned());
@@ -83,7 +89,10 @@ class MySqlStorageIntegrationTest {
                 assertEquals(first.sha256().get("website_export_events"), roundtrip.sha256().get("website_export_events"));
                 assertEquals(first.sha256().get("website_export_state"), roundtrip.sha256().get("website_export_state"));
                 assertEquals(first.sha256().get("website_match_revisions"), roundtrip.sha256().get("website_match_revisions"));
+                assertEquals(first.sha256().get("duels"), roundtrip.sha256().get("duels"));
+                assertEquals(first.sha256().get("duel_participants"), roundtrip.sha256().get("duel_participants"));
                 try (var from = new SettlementStore(mysql); var to = new SettlementStore(returned); var equipment = new SnapshotStore(returned)) {
+                    assertEquals(duel, to.duelMatch(duel.sessionId()));
                     assertEquals(from.history(player, 1), to.history(player, 1));
                     assertEquals(Double.doubleToRawLongBits(preciseDamage), Double.doubleToRawLongBits(to.match(session).participants().getFirst().damage()));
                     assertEquals(SnapshotStore.Status.CONFIRMED, equipment.get(player).status());

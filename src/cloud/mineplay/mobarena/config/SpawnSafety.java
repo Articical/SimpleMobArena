@@ -19,6 +19,13 @@ public final class SpawnSafety {
 
     /** Returns null for a safe standing position, otherwise a short, actionable explanation. */
     public static String problem(Location location) {
+        return problem(location, HALF_WIDTH * 2, HEIGHT);
+    }
+
+    /** Uses the entity's real dimensions for wide ravagers and tall golems/endermen. */
+    public static String problem(Location location, double width, double height) {
+        if (!Double.isFinite(width) || !Double.isFinite(height) || width <= 0 || height <= 0 || width > 16 || height > 16)
+            return "invalid entity dimensions";
         if (location == null || location.getWorld() == null) return "world is not loaded";
         try {
             location.checkFinite();
@@ -29,12 +36,13 @@ public final class SpawnSafety {
         double x = location.getX(), y = location.getY(), z = location.getZ();
         if (Math.abs(x) >= 30_000_000 || Math.abs(z) >= 30_000_000)
             return "location is outside the world coordinate limit";
-        if (y < world.getMinHeight() || y + HEIGHT > world.getMaxHeight())
+        if (y < world.getMinHeight() || y + height > world.getMaxHeight())
             return "standing space is outside the world's build height";
 
-        BoundingBox body = new BoundingBox(x - HALF_WIDTH + EPSILON, y + EPSILON,
-            z - HALF_WIDTH + EPSILON, x + HALF_WIDTH - EPSILON, y + HEIGHT - EPSILON,
-            z + HALF_WIDTH - EPSILON);
+        double halfWidth = width / 2;
+        BoundingBox body = new BoundingBox(x - halfWidth + EPSILON, y + EPSILON,
+            z - halfWidth + EPSILON, x + halfWidth - EPSILON, y + height - EPSILON,
+            z + halfWidth - EPSILON);
         BoundingBox support = new BoundingBox(body.getMinX(), y - SUPPORT_DEPTH, body.getMinZ(),
             body.getMaxX(), y + EPSILON, body.getMaxZ());
         BoundingBox contact = body.clone().union(support);

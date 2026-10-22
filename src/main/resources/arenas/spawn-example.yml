@@ -3,6 +3,9 @@
 # Never creates worlds or modifies blocks. Disabled until explicitly enabled.
 name: Spawn Arena
 enabled: false
+mode: MOB_ARENA
+# Leave blank to use config.yml waves.mobs. Named pools live in config.yml mob-sets.
+mob-set: ''
 world: world
 # Select a lower corner with setpos1 and an opposite upper corner with setpos2.
 pos1: ''
@@ -21,3 +24,12 @@ max-active-mobs: 100
 max-waves: 30
 # Optional; requires an installed WorldGuard and an existing containing region.
 worldguard-region: ''
+# Optional per-arena overrides; omitted values inherit config.yml waves settings.
+# Top-level max-waves and max-active-mobs above take precedence over waves values.
+# waves:
+#   base-mobs: 8
+#   player-health-scaling:
+#     additional-player-multiplier: 0.2
+#   mobs: # When present, replaces the selected pool; rows inherit global mob settings.
+#     ZOMBIE: {unlock-wave: 1, weight: 10, baby-chance: 0.2}
+#     SPIDER: {unlock-wave: 1, weight: 5}

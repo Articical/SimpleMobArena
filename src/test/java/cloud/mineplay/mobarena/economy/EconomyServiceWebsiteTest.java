@@ -1,6 +1,7 @@
 package cloud.mineplay.mobarena.economy;
 
 import cloud.mineplay.mobarena.storage.SettlementStore;
+import cloud.mineplay.mobarena.storage.WebsiteExportStore;
 import cloud.mineplay.mobarena.website.WebsiteExportSettings;
 import cloud.mineplay.mobarena.website.WebsitePublisher;
 import java.math.BigDecimal;
@@ -134,6 +135,25 @@ class EconomyServiceWebsiteTest {
         assertEquals(Settlement.Status.PENDING, service.payouts(result.sessionId()).get(5, TimeUnit.SECONDS).getFirst().status());
         var next = transportLedger.get().events(Instant.now().plusSeconds(1), 10).get(5, TimeUnit.SECONDS).getFirst();
         assertArrayEquals(event.payload(), next.payload());
+        verify(gateway, never()).deposit(any(), any(), anyInt());
+    }
+
+    @Test void duelFinishQueuesWebsiteSnapshotAndEveryDeliveryMutationUsesLedgerWorker() throws Exception {
+        start(settings(source));
+        doAnswer(call -> {
+            assertEquals("SimpleMobArena-ledger", Thread.currentThread().getName());
+            return call.callRealMethod();
+        }).when(opened.get()).recordDuel(any());
+        var result = DuelStoreTest.result(UUID.randomUUID(), DuelStoreTest.START.plusSeconds(120));
+        service.finishDuel(result).get(5, TimeUnit.SECONDS);
+        var event = transportLedger.get().events(Instant.now().plusSeconds(2), 10).get(5, TimeUnit.SECONDS).getFirst();
+        assertEquals(WebsiteExportStore.Kind.DUEL, event.kind());
+        assertEquals(result.sessionId(), event.sessionId());
+        transportLedger.get().failed(event.eventId(), "HTTP_503", Instant.now(), false).get(5, TimeUnit.SECONDS);
+        assertEquals(1, service.websiteStatus().get(5, TimeUnit.SECONDS).queue().pending());
+        transportLedger.get().delivered(event.eventId(), event.revision(), Instant.now()).get(5, TimeUnit.SECONDS);
+        assertEquals(0, service.websiteStatus().get(5, TimeUnit.SECONDS).queue().pending());
+        assertEquals(0, service.stats(DuelStoreTest.RED).get(5, TimeUnit.SECONDS).kills());
         verify(gateway, never()).deposit(any(), any(), anyInt());
     }
 

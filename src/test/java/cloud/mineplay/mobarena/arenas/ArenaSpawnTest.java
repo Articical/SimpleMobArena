@@ -6,6 +6,8 @@ import cloud.mineplay.mobarena.config.SpawnSafety;
 import cloud.mineplay.mobarena.economy.EconomyService;
 import cloud.mineplay.mobarena.economy.EconomySettings;
 import cloud.mineplay.mobarena.economy.SessionResult;
+import cloud.mineplay.mobarena.duels.DuelResult;
+import cloud.mineplay.mobarena.duels.DuelTeams.Team;
 import cloud.mineplay.mobarena.enums.GameState;
 import cloud.mineplay.mobarena.equipment.EquipmentService;
 import cloud.mineplay.mobarena.session.Participation;
@@ -118,6 +120,7 @@ class ArenaSpawnTest {
         when(plugin.getServer()).thenReturn(server);
         when(server.getOnlinePlayers()).thenAnswer(call -> List.copyOf(onlinePlayers));
         when(economy.finish(any(SessionResult.class))).thenReturn(CompletableFuture.completedFuture(null));
+        when(economy.finishDuel(any(DuelResult.class))).thenReturn(CompletableFuture.completedFuture(null));
         when(economy.rewardSettings()).thenReturn(EconomySettings.defaults());
         NamespacedKey sessionKey = new NamespacedKey("simplemobarena", "session");
         when(plugin.sessionKey()).thenReturn(sessionKey);
@@ -234,6 +237,147 @@ class ArenaSpawnTest {
         order.verify(mob).setShouldBurnInDay(true);
         order.verify(mob).setShouldBurnInDay(false);
         order.verify(mob).setFireTicks(0);
+    }
+
+    @Test void explosionCompletesOnceAfterDamageWithoutTreatingItsMissingEntityAsFailure() {
+        when(economy.waveReward(anyInt(),anyInt())).thenReturn(BigDecimal.TEN);
+        when(economy.capPot(any())).thenAnswer(call -> call.getArgument(0));
+        beginFirstWave();
+        var creeper = mock(org.bukkit.entity.Creeper.class);
+        when(creeper.getUniqueId()).thenReturn(mobId);
+        doReturn(mob.getPersistentDataContainer()).when(creeper).getPersistentDataContainer();
+        var scheduler = mock(org.bukkit.scheduler.BukkitScheduler.class);
+        bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+        ArgumentCaptor<Runnable> completion = ArgumentCaptor.forClass(Runnable.class);
+        arena.mobExploded(creeper);
+        arena.mobExploded(creeper);
+        verify(scheduler,times(1)).runTask(eq(plugin),completion.capture());
+        assertEquals(0,arena.getCompletedWaves(),"Explosion damage must resolve before awarding the wave.");
+        addedToWorld.set(false);
+        tickAt(20);
+        assertEquals(GameState.ACTIVE,arena.getArenaState());
+        completion.getValue().run();
+        assertEquals(GameState.INTERMISSION,arena.getArenaState());
+        assertEquals(1,arena.getCompletedWaves());
+        assertEquals(0,arena.getKills(playerId),"A self-explosion is not a player kill.");
+        completion.getValue().run();
+        verify(economy,times(1)).waveReward(1,1);
+        verify(economy,never()).finish(any(SessionResult.class));
+    }
+
+    @Test void staleExplosionCallbackCannotCompleteANewSession() {
+        beginFirstWave();
+        var creeper = mock(org.bukkit.entity.Creeper.class);
+        when(creeper.getUniqueId()).thenReturn(mobId);
+        doReturn(mob.getPersistentDataContainer()).when(creeper).getPersistentDataContainer();
+        var scheduler = mock(org.bukkit.scheduler.BukkitScheduler.class);
+        bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+        ArgumentCaptor<Runnable> completion = ArgumentCaptor.forClass(Runnable.class);
+        arena.mobExploded(creeper);
+        verify(scheduler).runTask(eq(plugin),completion.capture());
+        arena.endArena();
+        UUID nextSession = arena.getSessionId();
+        completion.getValue().run();
+        assertEquals(nextSession,arena.getSessionId());
+        assertEquals(0,arena.getCompletedWaves());
+        verify(economy,never()).waveReward(anyInt(),anyInt());
+    }
+
+    @Test void summonedVexAreBoundedCleanedWithCasterAndDoNotIncreaseKillRewards() {
+        when(economy.waveReward(anyInt(),anyInt())).thenReturn(BigDecimal.TEN);
+        when(economy.capPot(any())).thenAnswer(call -> call.getArgument(0));
+        beginFirstWave();
+        var caster = mock(org.bukkit.entity.Evoker.class);
+        when(caster.getUniqueId()).thenReturn(mobId);
+        doReturn(mob.getPersistentDataContainer()).when(caster).getPersistentDataContainer();
+        var summons = new ArrayList<org.bukkit.entity.Vex>();
+        for (int i=0;i<4;i++) {
+            var vex = mock(org.bukkit.entity.Vex.class);
+            UUID id = UUID.randomUUID();
+            when(vex.getUniqueId()).thenReturn(id);
+            doReturn(mob.getLocation()).when(vex).getLocation();
+            when(vex.isValid()).thenReturn(true);
+            var data = mock(PersistentDataContainer.class);
+            when(vex.getPersistentDataContainer()).thenReturn(data);
+            when(data.get(plugin.sessionKey(),PersistentDataType.STRING)).thenAnswer(call -> arena.getSessionId().toString());
+            bukkit.when(() -> Bukkit.getEntity(id)).thenReturn(vex);
+            assertEquals(i<3,arena.adoptSummonedMob(vex,caster));
+            assertEquals(i<3,arena.isCombatMob(id));
+            summons.add(vex);
+        }
+        arena.mobDeath(summons.getFirst(),player);
+        assertEquals(0,arena.getKills(playerId));
+        assertEquals(0,arena.getCompletedWaves());
+        arena.mobDeath(mob,player);
+        verify(summons.get(1)).remove();
+        verify(summons.get(2)).remove();
+        assertEquals(1,arena.getKills(playerId));
+        assertEquals(1,arena.getCompletedWaves());
+        assertFalse(arena.isCombatMob(summons.get(1).getUniqueId()));
+    }
+
+    @Test void summonedVexCannotComeFromAnOutsiderOrNonEvoker() {
+        beginFirstWave();
+        var caster = mock(org.bukkit.entity.Evoker.class);
+        when(caster.getUniqueId()).thenReturn(UUID.randomUUID());
+        when(caster.getPersistentDataContainer()).thenReturn(mock(PersistentDataContainer.class));
+        assertFalse(arena.adoptSummonedMob(mock(org.bukkit.entity.Vex.class),caster));
+        assertFalse(arena.adoptSummonedMob(mock(org.bukkit.entity.Vex.class),mob));
+    }
+
+    @Test void summonsShareTheWaveMobCapAndCancelledSpawnsDisappearQuietly() {
+        arena.getConfiguration().set("max-active-mobs",2);
+        arena = new Arena(plugin,new ArenaDefinition("spawn",arena.getConfiguration(),plugin.getConfig()));
+        beginFirstWave();
+        var caster = mock(org.bukkit.entity.Evoker.class);
+        when(caster.getUniqueId()).thenReturn(mobId);
+        doReturn(mob.getPersistentDataContainer()).when(caster).getPersistentDataContainer();
+        var vex = mock(org.bukkit.entity.Vex.class);
+        UUID id = UUID.randomUUID();
+        when(vex.getUniqueId()).thenReturn(id);
+        doReturn(mob.getLocation()).when(vex).getLocation();
+        when(vex.getPersistentDataContainer()).thenReturn(mock(PersistentDataContainer.class));
+        assertTrue(arena.adoptSummonedMob(vex,caster));
+        var another = mock(org.bukkit.entity.Vex.class);
+        doReturn(mob.getLocation()).when(another).getLocation();
+        assertFalse(arena.adoptSummonedMob(another,caster),"Caster plus one minion fill the arena's cap.");
+        tickAt(20); // No Bukkit entity exists: a later listener cancelled the summon.
+        assertFalse(arena.isCombatMob(id));
+        assertEquals(GameState.ACTIVE,arena.getArenaState());
+        verify(economy,never()).finish(any(SessionResult.class));
+    }
+
+    @Test void jockeyUsesTheFittingPadWhenTheOriginalSpawnIsTooSmall() {
+        arena.getConfiguration().set("mob-spawns",List.of("world,4.5,64,4.5","world,7.5,64,7.5"));
+        arena = new Arena(plugin,new ArenaDefinition("spawn",arena.getConfiguration(),plugin.getConfig()));
+        arena.definition().mobSettings(EntityType.ZOMBIE).set("chicken-jockey-chance",1.0);
+        when(mob.getWidth()).thenReturn(1.2);
+        when(mob.getHeight()).thenReturn(2.4);
+        when(mob.teleport(any(Location.class))).thenReturn(true);
+        AtomicReference<Location> original = new AtomicReference<>();
+        when(world.spawn(any(Location.class),eq(Zombie.class),eq(CreatureSpawnEvent.SpawnReason.CUSTOM),eq(false),any()))
+            .thenAnswer(call -> {
+                original.set(call.getArgument(0));
+                Consumer<Zombie> initializer = call.getArgument(4);
+                initializer.accept(mob); addedToWorld.set(true); return mob;
+            });
+        safety.when(() -> SpawnSafety.problem(any(Location.class),eq(1.2),eq(2.4)))
+            .thenAnswer(call -> call.getArgument(0).equals(original.get()) ? "too small" : null);
+        var chicken = mock(org.bukkit.entity.Chicken.class);
+        when(chicken.getUniqueId()).thenReturn(UUID.randomUUID());
+        when(chicken.getPersistentDataContainer()).thenReturn(mock(PersistentDataContainer.class));
+        when(chicken.isValid()).thenReturn(true);
+        when(chicken.addPassenger(mob)).thenReturn(true);
+        when(world.spawn(any(Location.class),eq(org.bukkit.entity.Chicken.class),eq(CreatureSpawnEvent.SpawnReason.CUSTOM),eq(false),any()))
+            .thenAnswer(call -> {
+                Consumer<org.bukkit.entity.Chicken> initializer = call.getArgument(4);
+                initializer.accept(chicken); return chicken;
+            });
+        beginFirstWave();
+        ArgumentCaptor<Location> relocated = ArgumentCaptor.forClass(Location.class);
+        verify(mob).teleport(relocated.capture());
+        assertNotEquals(original.get(),relocated.getValue());
+        verify(world).spawn(eq(relocated.getValue()),eq(org.bukkit.entity.Chicken.class),eq(CreatureSpawnEvent.SpawnReason.CUSTOM),eq(false),any());
     }
 
     @Test void invalidMobFromCancelledSpawnRecoversPlayersAndExplainsRegionFlags() {
@@ -850,6 +994,36 @@ class ArenaSpawnTest {
         return new DynamicSpawns();
     }
 
+    @Test void themedRoundKeepsItsPoolAcrossBatchesAndCooldownResetsWithSession() {
+        DynamicSpawns spawns = configureScalingScenario(config -> {
+            config.set("waves.meme-rounds.enabled",true);
+            config.set("waves.meme-rounds.chance",1.0);
+            config.set("waves.meme-rounds.minimum-wave",1);
+            config.set("waves.meme-rounds.cooldown-waves",3);
+            config.set("waves.meme-rounds.types.zombies.name","Zombie Parade");
+            config.set("waves.meme-rounds.types.zombies.mobs",List.of("ZOMBIE"));
+        });
+        startPlayers(1);
+        assertEquals("Zombie Parade",arena.getCurrentWaveTheme());
+        List<ArenaDefinition.MobRule> original = List.copyOf(arena.definition().mobs);
+        arena.definition().mobs.clear();
+        arena.definition().mobs.add(new ArenaDefinition.MobRule(EntityType.HUSK,1,1,1));
+        spawns.completeWave(); // Every later batch still uses the selected zombie pool.
+        assertEquals(6,spawns.inWave(1).size());
+        arena.definition().mobs.clear(); arena.definition().mobs.addAll(original);
+        for (int wave=2;wave<=4;wave++) {
+            tickAt(currentTick.get()+1);
+            assertEquals("",arena.getCurrentWaveTheme());
+            spawns.completeWave();
+        }
+        tickAt(currentTick.get()+1);
+        assertEquals("Zombie Parade",arena.getCurrentWaveTheme());
+        arena.endArena();
+        assertEquals("",arena.getCurrentWaveTheme());
+        startPlayers(1);
+        assertEquals("Zombie Parade",arena.getCurrentWaveTheme(),"New session has no previous theme cooldown.");
+    }
+
     private List<Player> startPlayers(int count) {
         List<Player> starters = new ArrayList<>();
         starters.add(player);
@@ -951,6 +1125,139 @@ class ArenaSpawnTest {
         ArenaDefinition definition = new ArenaDefinition("spawn", config, plugin.getConfig());
         assertTrue(definition.errors.isEmpty(), () -> definition.errors.toString());
         arena = new Arena(plugin, definition);
+    }
+
+    @Test void soloDuelCreditsLethalHitRecordsTeamsAndNeverRunsMobRewards() throws Exception {
+        Player opponent = onlinePlayer("Opponent");
+        arena = duelArena("duel",1,false,0);
+        joinDuel(arena,player,null); joinDuel(arena,opponent,null);
+        arena.tick(1);
+        assertEquals(GameState.ACTIVE,arena.getArenaState());
+        assertTrue(arena.getActiveMobs().isEmpty());
+        assertEquals(0,arena.getCurrentWave());
+        assertTrue(arena.opponents(playerId,opponent.getUniqueId()));
+        verify(player).sendMessage(argThat((Component message) -> PlainTextComponentSerializer.plainText().serialize(message).contains("Blue: Opponent")));
+        arena.duelHit(playerId,opponent.getUniqueId(),20);
+        arena.eliminate(opponent,"was eliminated");
+        arena.eliminate(opponent,"was eliminated");
+
+        ArgumentCaptor<DuelResult> saved = ArgumentCaptor.forClass(DuelResult.class);
+        verify(economy,times(1)).finishDuel(saved.capture());
+        assertEquals("RED",saved.getValue().winner());
+        assertFalse(saved.getValue().cancelled());
+        var winner = saved.getValue().participants().stream().filter(p -> p.playerId().equals(playerId)).findFirst().orElseThrow();
+        assertEquals(1,winner.kills()); assertEquals(20,winner.damage()); assertFalse(winner.eliminated());
+        assertTrue(saved.getValue().participants().stream().filter(p -> p.playerId().equals(opponent.getUniqueId())).findFirst().orElseThrow().eliminated());
+        verify(economy,never()).finish(any(SessionResult.class));
+        verify(economy,never()).waveReward(anyInt(),anyInt());
+        verify(equipment).restore(eq(player),eq(arena.definition().exit),any());
+        verify(equipment).restore(eq(opponent),eq(arena.definition().exit),any());
+        assertEquals(GameState.WAITING,arena.getArenaState());
+    }
+
+    @Test void chosenTeamDuelRequiresFullTeamsAndKeepsRunningUntilLastOpponentLeaves() throws Exception {
+        Player red2 = onlinePlayer("RedTwo"), blue1 = onlinePlayer("BlueOne"), blue2 = onlinePlayer("BlueTwo");
+        arena = duelArena("teams",2,true,0);
+        joinDuel(arena,player,"red"); joinDuel(arena,red2,"red"); joinDuel(arena,blue1,"blue");
+        assertThrows(IllegalStateException.class,arena::startArena);
+        assertThrows(IllegalStateException.class,() -> arena.reserve(blue2.getUniqueId(),"red"));
+        assertEquals(0,arena.reservedCount());
+        joinDuel(arena,blue2,"blue"); arena.tick(1);
+        assertFalse(arena.opponents(playerId,red2.getUniqueId()));
+        assertTrue(arena.opponents(playerId,blue1.getUniqueId()));
+        UUID match = arena.getSessionId();
+        arena.eliminate(blue1,"left the match");
+        assertEquals(GameState.ACTIVE,arena.getArenaState());
+        assertThrows(IllegalStateException.class,() -> arena.reserve(blue1.getUniqueId(),"blue"));
+        UUID departedId = blue1.getUniqueId();
+        Arena anotherArena = mock(Arena.class);
+        when(manager.getPlayerArena(departedId)).thenReturn(anotherArena);
+        clearInvocations(blue1);
+        arena.eliminate(blue2,"left the match");
+        verify(blue1,never()).showTitle(any(Title.class));
+        verify(blue1).sendMessage(argThat((Component message) -> PlainTextComponentSerializer.plainText().serialize(message).contains("Defeat in")));
+        ArgumentCaptor<DuelResult> saved = ArgumentCaptor.forClass(DuelResult.class);
+        verify(economy).finishDuel(saved.capture());
+        assertEquals(match,saved.getValue().sessionId());
+        assertEquals("RED",saved.getValue().winner());
+        assertEquals(4,saved.getValue().participants().size());
+        assertTrue(saved.getValue().participants().stream().allMatch(p -> p.kills()==0),"Forfeits don't grant free kill credit");
+    }
+
+    @Test void duelTimeLimitIsDrawAndAdministratorStopIsCancelled() throws Exception {
+        Player opponent = onlinePlayer("Opponent");
+        arena = duelArena("duel",1,false,0);
+        joinDuel(arena,player,null); joinDuel(arena,opponent,null); arena.tick(1);
+        arena.tick(601);
+        ArgumentCaptor<DuelResult> saved = ArgumentCaptor.forClass(DuelResult.class);
+        verify(economy).finishDuel(saved.capture());
+        assertEquals("DRAW",saved.getValue().winner());
+        assertFalse(saved.getValue().cancelled()); assertEquals("TIME_LIMIT",saved.getValue().endReason());
+        clearInvocations(economy);
+        joinDuel(arena,player,null); joinDuel(arena,opponent,null); arena.tick(1);
+        arena.endArena();
+        verify(economy).finishDuel(saved.capture());
+        assertTrue(saved.getValue().cancelled()); assertEquals("DRAW",saved.getValue().winner());
+    }
+
+    @Test void simultaneousMobArenaAndDuelShareChunkTicketUntilBothFinish() throws Exception {
+        beginFirstWave();
+        Arena mobArena = arena;
+        UUID mobSession = mobArena.getSessionId();
+        Player red = onlinePlayer("DuelRed"), blue = onlinePlayer("DuelBlue");
+        Arena duel = duelArena("neighbour",1,false,11);
+        assertFalse(mobArena.definition().overlaps(duel.definition()));
+        joinDuel(duel,red,null); joinDuel(duel,blue,null); duel.tick(1);
+        assertEquals(GameState.ACTIVE,mobArena.getArenaState());
+        assertEquals(GameState.ACTIVE,duel.getArenaState());
+        assertNotEquals(mobArena.getSessionId(),duel.getSessionId());
+        verify(chunk,times(1)).addPluginChunkTicket(plugin);
+        duel.eliminate(blue,"left the match");
+        assertEquals(GameState.WAITING,duel.getArenaState());
+        assertEquals(GameState.ACTIVE,mobArena.getArenaState());
+        assertEquals(mobSession,mobArena.getSessionId());
+        assertEquals(java.util.Set.of(mobId),mobArena.getActiveMobs());
+        verify(mob,never()).remove();
+        verify(chunk,never()).removePluginChunkTicket(plugin);
+        verify(equipment,never()).restore(eq(player),any(),any());
+        mobArena.eliminate(player,"was eliminated");
+        verify(chunk,times(1)).removePluginChunkTicket(plugin);
+        verify(economy,times(1)).finishDuel(any()); verify(economy,times(1)).finish(any());
+    }
+
+    @Test void duelReservationCancellationReleasesSelectedTeamSlot() throws Exception {
+        arena = duelArena("duel",1,true,0);
+        arena.reserve(playerId,"red");
+        assertEquals(1,arena.teamCount(Team.RED));
+        arena.releaseReservation(playerId);
+        assertEquals(0,arena.teamCount(Team.RED));
+        assertEquals(0,arena.reservedCount());
+        arena.reserve(UUID.randomUUID(),"red");
+        assertEquals(1,arena.teamCount(Team.RED));
+    }
+
+    private Arena duelArena(String id, int size, boolean choose, int x) throws Exception {
+        YamlConfiguration config = new YamlConfiguration();
+        config.loadFromString(arena.getConfiguration().saveToString());
+        config.set("mode",size == 1 && !choose ? "DUEL" : "TEAM_DUEL");
+        config.set("duel.team-size",size);
+        config.set("duel.team-selection",choose ? "CHOOSE" : "AUTO");
+        config.set("duel.maximum-seconds",30);
+        config.set("countdown-seconds",0);
+        config.set("pos1","world,"+x+",63,0"); config.set("pos2","world,"+(x+4)+",70,10");
+        config.set("duel.red-spawns",List.of("world,"+(x+1.5)+",64,2.5"));
+        config.set("duel.blue-spawns",List.of("world,"+(x+3.5)+",64,8.5"));
+        config.set("player-spawns",List.of()); config.set("mob-spawns",List.of());
+        config.set("exit","world,18.5,64,2.5");
+        ArenaDefinition definition = new ArenaDefinition(id,config,plugin.getConfig());
+        assertTrue(definition.errors.isEmpty(),() -> definition.errors.toString());
+        return new Arena(plugin,definition);
+    }
+    private void joinDuel(Arena target, Player participant, String team) {
+        target.reserve(participant.getUniqueId(),team); target.joined(participant);
+        Location spawn = target.team(participant.getUniqueId()) == Team.RED
+            ? target.definition().redSpawns.getFirst() : target.definition().blueSpawns.getFirst();
+        when(participant.getLocation()).thenReturn(spawn);
     }
 
     private void configureWaveWithPendingMob() {

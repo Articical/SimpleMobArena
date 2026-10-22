@@ -1,6 +1,6 @@
 # Mineplay SimpleMobArena — website data and API handoff
 
-Updated for plugin **1.0.7**, ledger schema **4**, on **17 October 2026**. Source match/payout semantics and the v1 API payload remain unchanged. See [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md) for publisher configuration, commands and recovery. The PostgreSQL DDL and queries below are design examples; the website repository owns its deployed schema and importer.
+Updated for plugin **1.0.8**, ledger schema **5**, on **21 October 2026**. Source mob-match/payout semantics and the existing v1 API payload remain unchanged. See [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md) for publisher configuration, commands and recovery, and [DUELS_API_HANDOFF.md](DUELS_API_HANDOFF.md) for the separate duel endpoint, complete payload and PostgreSQL import requirements. The PostgreSQL DDL and queries below are design examples; the website repository owns its deployed schema and importer.
 
 ## Brief for the website Codex instance
 
@@ -40,12 +40,15 @@ With SQLITE, the plugin data folder contains:
 | mobarena.db | Match ledger, participants, settlements and settlement audit | Export the allowlisted fields below through the API |
 | equipment.db | Inventory snapshots and recovery state | No |
 | settlement-outbox/ | Durable binary handoff from finished match to the plugin's SQL ledger | No; this is not a website delivery queue |
+| duel-outbox/ | Durable handoff for finished duel results before SQL insertion | No; export the duel snapshot instead |
 | config.yml | Storage credentials, economy, waves, sounds and other settings | No |
 | arenas/*.yml | Current arena IDs/names, boundaries, spawns and settings | Not in the initial match API |
 | classes.yml | Current equipment/class definitions | No |
 | npc-menus.yml | Citizens NPC UUID/ID links to the arena menu | No |
 
-With MYSQL, ledger and equipment tables share the configured MySQL database. The local settlement-outbox directory is still used. Neither storage option currently writes to website PostgreSQL.
+With MYSQL, ledger and equipment tables share the configured MySQL database. Both local outbox directories are still used. Neither storage option writes directly to website PostgreSQL.
+
+Schema 5 adds separate `duels` and `duel_participants` tables, with mode, winning team, roster assignments and PvP performance. Their delivery tables are `website_duel_export_state`, `website_duel_revisions` and `website_duel_export_events`. Duels never enter the mob participation, class-unlock, payout or leaderboard aggregates described below. The new website route still requires receiver implementation; its full contract is in [DUELS_API_HANDOFF.md](DUELS_API_HANDOFF.md).
 
 Only matches that actually started are persisted. Leaving/cancelling a lobby before the match starts produces no stored match. After a started match ends, the plugin saves its result to the durable local outbox, then inserts the match, all participants and all initial settlements in one SQL transaction. Replaying the same session UUID does not insert a duplicate.
 
@@ -110,7 +113,7 @@ The source database does not enforce a composite settlement-to-participant forei
 
 - **settlement_audit:** append-only transition evidence: id (auto-increment), settlement_id (nullable reference), event_at, actor, event and detail. Actor can identify an administrator. This is operational evidence, not a public event API. Omit raw actor/detail from website ingestion.
 - **equipment_snapshots:** player_uuid primary key, unique recovery token, choice, original inventory blob, nullable restore_target blob, status, created_at and updated_at. Status is PREPARED, RESTORING or CONFIRMED. This is recovery state, not historical per-match kit data; a later join can replace a confirmed row. Do not export inventory blobs or recovery tokens.
-- **mobarena_schema:** MySQL schema-version metadata, keyed by component; ledger is version 4 and equipment is version 1. SQLite keeps the equivalent versions in each database's PRAGMA user_version.
+- **mobarena_schema:** MySQL schema-version metadata, keyed by component; ledger is version 5 and equipment is version 1. SQLite keeps the equivalent versions in each database's PRAGMA user_version.
 - **website_export_state**, **website_match_revisions**, **website_export_events:** schema 4 source identity, monotonically increasing match revisions, exact UTF-8 snapshots and durable delivery/backfill state. These are internal publisher records, not additional payload fields; see [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md).
 - **mobarena_migration_guard:** operational guard used by the offline storage migration tool; not website data.
 
@@ -163,9 +166,9 @@ The default minimums are three completed team waves, 60 seconds of individual pa
 - Show a stored name on historical match pages. For a profile label, use the most recently observed historical name or a separately verified current name. UUID identity must survive renames.
 - Payout history is a list of settlements, not an additional sum of each processing/retry/audit event.
 
-### Gameplay data not directly recorded in schema 4
+### Gameplay data not directly recorded for mob matches
 
-There are no stored per-player elimination waves, exit reasons/timestamps, death counts, selected classes, mob-type kill breakdowns, per-wave results, survivor lists, explicit victory flag, arena display-name snapshot, configured maximum waves, historical mob-health settings, or per-match plugin/server version.
+Mob matches have no stored per-player elimination waves, exit reasons/timestamps, death counts, selected classes, mob-type kill breakdowns, per-wave results, survivor lists, explicit victory flag, arena display-name snapshot, configured maximum waves, historical mob-health settings, or per-match plugin/server version. Duel records separately include teams, winner and elimination flags, as specified in the duel handoff.
 
 starting_player_count is not an explicit column. For normal current matches it can be derived from roster size: lobby departures are removed, late joins are disallowed, and post-start departures stay in the roster. Treat this as a derived roster count, with unknown/null provenance for anomalous/imported data rather than inventing an exact historical snapshot.
 

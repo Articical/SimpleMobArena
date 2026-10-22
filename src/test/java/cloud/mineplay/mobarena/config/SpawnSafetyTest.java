@@ -36,6 +36,19 @@ class SpawnSafetyTest {
         assertNull(SpawnSafety.problem(new Location(world, 10.5, 64, -10.5)));
     }
 
+    @Test void largeMobNeedsItsFullWidthAndHeightClear() {
+        for (int x=-1;x<=1;x++) for (int z=-1;z<=1;z++)
+            put(x,63,z,Material.STONE,box(0,0,0,1,1,1));
+        put(1,64,0,Material.STONE,box(0,0,0,1,1,1));
+        assertNull(SpawnSafety.problem(at(.5,64,.5)));
+        assertNotNull(SpawnSafety.problem(at(.5,64,.5),1.95,2.2));
+        blocks.remove(key(1,64,0));
+        put(0,66,0,Material.STONE,box(0,0,0,1,1,1));
+        assertNull(SpawnSafety.problem(at(.5,64,.5)));
+        assertNotNull(SpawnSafety.problem(at(.5,64,.5),.6,2.9));
+        assertNotNull(SpawnSafety.problem(at(.5,64,.5),Double.NaN,2.9));
+    }
+
     @Test void lowerSlabSupportsAPlayerStandingInsideItsBlockCell() {
         put(0, 64, 0, Material.STONE_SLAB, box(0, 0, 0, 1, .5, 1));
         assertNull(SpawnSafety.problem(at(.5, 64.5, .5)));

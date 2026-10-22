@@ -1,6 +1,7 @@
 package cloud.mineplay.mobarena.storage;
 
 import cloud.mineplay.mobarena.website.MatchSnapshotEncoder;
+import cloud.mineplay.mobarena.website.DuelSnapshotEncoder;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -15,11 +16,25 @@ public final class WebsiteExportStore {
     private static final DateTimeFormatter UTC = new DateTimeFormatterBuilder().appendInstant(9).toFormatter();
     private final Connection connection;
     private final boolean mysql;
+    private final Kind kind;
+    private final String stateTable;
+    private final String revisionsTable;
+    private final String eventsTable;
+    private final String matchesTable;
     private boolean enabled;
 
     WebsiteExportStore(Connection connection, boolean mysql) {
+        this(connection, mysql, Kind.MATCH);
+    }
+
+    WebsiteExportStore(Connection connection, boolean mysql, Kind kind) {
         this.connection = connection;
         this.mysql = mysql;
+        this.kind = kind;
+        stateTable = kind == Kind.MATCH ? "website_export_state" : "website_duel_export_state";
+        revisionsTable = kind == Kind.MATCH ? "website_match_revisions" : "website_duel_revisions";
+        eventsTable = kind == Kind.MATCH ? "website_export_events" : "website_duel_export_events";
+        matchesTable = kind == Kind.MATCH ? "sessions" : "duels";
     }
 
     void configure(boolean requestedEnabled, UUID requestedSource) throws SQLException {
@@ -28,7 +43,7 @@ public final class WebsiteExportStore {
             // Changes during a capture gap may fall behind an active scan's cursor. Keep the
             // administrator's backfill intent, but rescan its full range after re-enabling.
             try (var statement = connection.createStatement()) {
-                statement.executeUpdate("UPDATE website_export_state SET backfill_cursor=NULL WHERE id=1 AND backfill_active<>0");
+                statement.executeUpdate("UPDATE " + stateTable + " SET backfill_cursor=NULL WHERE id=1 AND backfill_active<>0");
             }
             return;
         }
@@ -37,10 +52,10 @@ public final class WebsiteExportStore {
         UUID current = source(false);
         if (current == null) {
             try (var statement = connection.createStatement(); var rows = statement.executeQuery(
-                    "SELECT CASE WHEN EXISTS(SELECT 1 FROM website_match_revisions) OR EXISTS(SELECT 1 FROM website_export_events) THEN 1 ELSE 0 END")) {
+                    "SELECT CASE WHEN EXISTS(SELECT 1 FROM " + revisionsTable + ") OR EXISTS(SELECT 1 FROM " + eventsTable + ") THEN 1 ELSE 0 END")) {
                 if (!rows.next() || rows.getLong(1) != 0) throw new IllegalArgumentException("WEBSITE_SOURCE_STATE_MISSING");
             }
-            try (var statement = connection.prepareStatement("INSERT INTO website_export_state(id,source_id,backfill_active) VALUES(1,?,0)")) {
+            try (var statement = connection.prepareStatement("INSERT INTO " + stateTable + "(id,source_id,backfill_active) VALUES(1,?,0)")) {
                 statement.setString(1, requestedSource.toString());
                 statement.executeUpdate();
             }
@@ -53,15 +68,15 @@ public final class WebsiteExportStore {
         UUID source = source(true);
         if (source == null) throw new SQLException("Website export source is missing");
         long previous = 0;
-        try (var statement = connection.prepareStatement("SELECT revision FROM website_match_revisions WHERE session_id=?")) {
+        try (var statement = connection.prepareStatement("SELECT revision FROM " + revisionsTable + " WHERE session_id=?")) {
             statement.setString(1, sessionId.toString());
             try (var rows = statement.executeQuery()) { if (rows.next()) previous = rows.getLong(1); }
         }
         if (previous < 0 || previous == Long.MAX_VALUE) throw new SQLException("Website revision exhausted");
         long revision = previous + 1;
         try (var statement = connection.prepareStatement(previous == 0
-                ? "INSERT INTO website_match_revisions(revision,session_id) VALUES(?,?)"
-                : "UPDATE website_match_revisions SET revision=? WHERE session_id=?")) {
+                ? "INSERT INTO " + revisionsTable + "(revision,session_id) VALUES(?,?)"
+                : "UPDATE " + revisionsTable + " SET revision=? WHERE session_id=?")) {
             statement.setLong(1, revision);
             statement.setString(2, sessionId.toString());
             if (statement.executeUpdate() != 1) throw new SQLException("Website revision allocation failed");
@@ -69,11 +84,13 @@ public final class WebsiteExportStore {
         UUID eventId = UUID.randomUUID();
         byte[] payload = null;
         String failure = null;
-        try { payload = MatchSnapshotEncoder.encode(connection, source, sessionId, eventId, revision, now); }
+        try { payload = kind == Kind.MATCH ? MatchSnapshotEncoder.encode(connection, source, sessionId, eventId, revision, now)
+                : DuelSnapshotEncoder.encode(connection, source, sessionId, eventId, revision, now); }
         catch (MatchSnapshotEncoder.InvalidSnapshot invalid) { failure = invalid.code(); }
+        catch (DuelSnapshotEncoder.InvalidSnapshot invalid) { failure = invalid.code(); }
         // A malformed historical match is retained for operator action without blocking a Vault state transition.
         // SQL failure here still rolls back both the ledger mutation and revision allocation.
-        try (var statement = connection.prepareStatement("INSERT INTO website_export_events(event_id,session_id,revision,payload,created_at,attempts,next_attempt_at,delivery_status,failure_code) VALUES(?,?,?,?,?,0,?,?,?)")) {
+        try (var statement = connection.prepareStatement("INSERT INTO " + eventsTable + "(event_id,session_id,revision,payload,created_at,attempts,next_attempt_at,delivery_status,failure_code) VALUES(?,?,?,?,?,0,?,?,?)")) {
             statement.setString(1, eventId.toString());
             statement.setString(2, sessionId.toString());
             statement.setLong(3, revision);
@@ -91,12 +108,12 @@ public final class WebsiteExportStore {
         if (!enabled) return List.of();
         int bounded = Math.clamp(limit, 1, 100);
         var result = new ArrayList<Event>();
-        try (var statement = connection.prepareStatement("SELECT event_id,session_id,revision,payload,attempts FROM website_export_events WHERE delivery_status='PENDING' AND next_attempt_at<=? AND payload IS NOT NULL ORDER BY next_attempt_at,created_at,session_id,revision LIMIT ?")) {
+        try (var statement = connection.prepareStatement("SELECT event_id,session_id,revision,payload,attempts FROM " + eventsTable + " WHERE delivery_status='PENDING' AND next_attempt_at<=? AND payload IS NOT NULL ORDER BY next_attempt_at,created_at,session_id,revision LIMIT ?")) {
             statement.setString(1, time(now));
             statement.setInt(2, bounded);
             try (var rows = statement.executeQuery()) {
                 while (rows.next()) result.add(new Event(UUID.fromString(rows.getString(1)), UUID.fromString(rows.getString(2)),
-                        rows.getLong(3), rows.getBytes(4), rows.getInt(5)));
+                        rows.getLong(3), rows.getBytes(4), rows.getInt(5), kind));
             }
         }
         return List.copyOf(result);
@@ -104,22 +121,29 @@ public final class WebsiteExportStore {
 
     void delivered(UUID eventId, long storedRevision, Instant now) throws SQLException {
         if (storedRevision < 1) throw new IllegalArgumentException("Invalid acknowledgement revision");
-        try (var statement = connection.prepareStatement("UPDATE website_export_events SET delivery_status='DELIVERED',acknowledged_at=?,stored_revision=?,failure_code=NULL WHERE event_id=? AND revision<=? AND payload IS NOT NULL AND delivery_status<>'DELIVERED'")) {
+        try (var statement = connection.prepareStatement("UPDATE " + eventsTable + " SET delivery_status='DELIVERED',acknowledged_at=?,stored_revision=?,failure_code=NULL WHERE event_id=? AND revision<=? AND payload IS NOT NULL AND delivery_status<>'DELIVERED'")) {
             statement.setString(1, time(now));
             statement.setLong(2, storedRevision);
             statement.setString(3, eventId.toString());
             statement.setLong(4, storedRevision);
             if (statement.executeUpdate() != 1) throw new SQLException("Website acknowledgement does not match an undelivered event");
         }
-        try (var statement = connection.prepareStatement("UPDATE website_export_state SET last_acknowledged_at=? WHERE id=1")) {
+        try (var statement = connection.prepareStatement("UPDATE " + stateTable + " SET last_acknowledged_at=? WHERE id=1")) {
             statement.setString(1, time(now));
             statement.executeUpdate();
         }
     }
 
+    boolean contains(UUID eventId) throws SQLException {
+        try (var statement = connection.prepareStatement("SELECT 1 FROM " + eventsTable + " WHERE event_id=?")) {
+            statement.setString(1, eventId.toString());
+            try (var rows = statement.executeQuery()) { return rows.next(); }
+        }
+    }
+
     void failed(UUID eventId, String safeCode, Instant nextAttempt, boolean quarantine) throws SQLException {
         String code = safeCode(safeCode);
-        try (var statement = connection.prepareStatement("UPDATE website_export_events SET attempts=CASE WHEN attempts<2147483647 THEN attempts+1 ELSE attempts END,next_attempt_at=?,delivery_status=?,failure_code=? WHERE event_id=? AND delivery_status<>'DELIVERED'")) {
+        try (var statement = connection.prepareStatement("UPDATE " + eventsTable + " SET attempts=CASE WHEN attempts<2147483647 THEN attempts+1 ELSE attempts END,next_attempt_at=?,delivery_status=?,failure_code=? WHERE event_id=? AND delivery_status<>'DELIVERED'")) {
             statement.setString(1, time(nextAttempt));
             statement.setString(2, quarantine ? "QUARANTINED" : "PENDING");
             statement.setString(3, code);
@@ -129,7 +153,7 @@ public final class WebsiteExportStore {
     }
 
     boolean retry(UUID eventId, Instant now) throws SQLException {
-        try (var statement = connection.prepareStatement("UPDATE website_export_events SET delivery_status='PENDING',next_attempt_at=? WHERE event_id=? AND delivery_status<>'DELIVERED' AND payload IS NOT NULL")) {
+        try (var statement = connection.prepareStatement("UPDATE " + eventsTable + " SET delivery_status='PENDING',next_attempt_at=? WHERE event_id=? AND delivery_status<>'DELIVERED' AND payload IS NOT NULL")) {
             statement.setString(1, time(now));
             statement.setString(2, eventId.toString());
             return statement.executeUpdate() == 1;
@@ -142,7 +166,7 @@ public final class WebsiteExportStore {
         String failure = null;
         UUID failureEvent = null;
         boolean backfill = false;
-        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT source_id,backfill_active,last_acknowledged_at,last_failure,last_failure_event_id FROM website_export_state WHERE id=1")) {
+        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT source_id,backfill_active,last_acknowledged_at,last_failure,last_failure_event_id FROM " + stateTable + " WHERE id=1")) {
             if (rows.next()) {
                 source = UUID.fromString(rows.getString(1));
                 backfill = rows.getInt(2) != 0;
@@ -155,7 +179,7 @@ public final class WebsiteExportStore {
         long pending = 0;
         long quarantined = 0;
         Instant oldest = null;
-        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT delivery_status,COUNT(*),MIN(created_at) FROM website_export_events WHERE delivery_status<>'DELIVERED' GROUP BY delivery_status")) {
+        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT delivery_status,COUNT(*),MIN(created_at) FROM " + eventsTable + " WHERE delivery_status<>'DELIVERED' GROUP BY delivery_status")) {
             while (rows.next()) {
                 if ("PENDING".equals(rows.getString(1))) { pending = rows.getLong(2); oldest = instant(rows.getString(3)); }
                 else if ("QUARANTINED".equals(rows.getString(1))) quarantined = rows.getLong(2);
@@ -168,28 +192,28 @@ public final class WebsiteExportStore {
         requireEnabled();
         try (var statement = connection.createStatement()) {
             // Reissuing while active resumes the durable cursor instead of starting over.
-            statement.executeUpdate("UPDATE website_export_state SET backfill_active=1,backfill_cursor=NULL WHERE id=1 AND backfill_active=0");
+            statement.executeUpdate("UPDATE " + stateTable + " SET backfill_active=1,backfill_cursor=NULL WHERE id=1 AND backfill_active=0");
         }
     }
 
     int backfillBatch(int limit, Instant now) throws SQLException {
         if (!enabled) return 0;
         String cursor;
-        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT backfill_active,backfill_cursor FROM website_export_state WHERE id=1" + (mysql ? " FOR UPDATE" : ""))) {
+        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT backfill_active,backfill_cursor FROM " + stateTable + " WHERE id=1" + (mysql ? " FOR UPDATE" : ""))) {
             if (!rows.next() || rows.getInt(1) == 0) return 0;
             cursor = rows.getString(2);
         }
         var sessions = new ArrayList<UUID>();
-        try (var statement = connection.prepareStatement("SELECT session_id FROM sessions WHERE session_id>? ORDER BY session_id LIMIT ?")) {
+        try (var statement = connection.prepareStatement("SELECT session_id FROM " + matchesTable + " WHERE session_id>? ORDER BY session_id LIMIT ?")) {
             statement.setString(1, cursor == null ? "" : cursor);
             statement.setInt(2, Math.clamp(limit, 1, 100));
             try (var rows = statement.executeQuery()) { while (rows.next()) sessions.add(UUID.fromString(rows.getString(1))); }
         }
         for (UUID session : sessions) enqueue(session, now);
         if (sessions.isEmpty()) {
-            try (var statement = connection.createStatement()) { statement.executeUpdate("UPDATE website_export_state SET backfill_active=0 WHERE id=1"); }
+            try (var statement = connection.createStatement()) { statement.executeUpdate("UPDATE " + stateTable + " SET backfill_active=0 WHERE id=1"); }
         } else {
-            try (var statement = connection.prepareStatement("UPDATE website_export_state SET backfill_cursor=? WHERE id=1")) {
+            try (var statement = connection.prepareStatement("UPDATE " + stateTable + " SET backfill_cursor=? WHERE id=1")) {
                 statement.setString(1, sessions.getLast().toString());
                 statement.executeUpdate();
             }
@@ -198,7 +222,7 @@ public final class WebsiteExportStore {
     }
 
     private UUID source(boolean lock) throws SQLException {
-        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT source_id FROM website_export_state WHERE id=1" + (lock && mysql ? " FOR UPDATE" : ""))) {
+        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT source_id FROM " + stateTable + " WHERE id=1" + (lock && mysql ? " FOR UPDATE" : ""))) {
             return rows.next() ? UUID.fromString(rows.getString(1)) : null;
         }
     }
@@ -208,7 +232,7 @@ public final class WebsiteExportStore {
     }
 
     private void recordFailure(UUID eventId, String code) throws SQLException {
-        try (var statement = connection.prepareStatement("UPDATE website_export_state SET last_failure=?,last_failure_event_id=? WHERE id=1")) {
+        try (var statement = connection.prepareStatement("UPDATE " + stateTable + " SET last_failure=?,last_failure_event_id=? WHERE id=1")) {
             statement.setString(1, safeCode(code));
             statement.setString(2, eventId.toString());
             statement.executeUpdate();
@@ -219,8 +243,13 @@ public final class WebsiteExportStore {
     private static String time(Instant instant) { return UTC.format(instant); }
     private static Instant instant(String value) { return value == null ? null : Instant.parse(value); }
 
-    public record Event(UUID eventId, UUID sessionId, long revision, byte[] payload, int attempts) {
-        public Event { payload = payload.clone(); }
+    public enum Kind { MATCH, DUEL }
+
+    public record Event(UUID eventId, UUID sessionId, long revision, byte[] payload, int attempts, Kind kind) {
+        public Event { payload = payload.clone(); java.util.Objects.requireNonNull(kind); }
+        public Event(UUID eventId, UUID sessionId, long revision, byte[] payload, int attempts) {
+            this(eventId, sessionId, revision, payload, attempts, Kind.MATCH);
+        }
         @Override public byte[] payload() { return payload.clone(); }
     }
 

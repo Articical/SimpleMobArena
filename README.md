@@ -14,7 +14,7 @@ Install a Java 25 JDK, set `JAVA_HOME`, then run:
 .\gradlew.bat clean build
 ```
 
-On Linux/macOS use `sh ./gradlew clean build`. Build output is `build/libs/SimpleMobArena-1.0.7.jar`. This single JAR contains SQLite JDBC, its native libraries, MySQL Connector/J and Gson; do not deploy compiled files from the old Eclipse `bin` directory. Tests are in `src/test/java` and reports in `build/reports/tests/test/index.html`.
+On Linux/macOS use `sh ./gradlew clean build`. Build output is `build/libs/SimpleMobArena-1.0.10.jar`. This single JAR contains SQLite JDBC, its native libraries, MySQL Connector/J and Gson; do not deploy compiled files from the old Eclipse `bin` directory. Tests are in `src/test/java` and reports in `build/reports/tests/test/index.html`.
 
 The existing `src/cloud/mineplay/mobarena` source layout and the `Arena` / `ArenaManager` concepts are retained. Resources live in `src/main/resources`. SQLite and all runtime dependencies are packaged by the `jar` task; the Paper API and Vault economy are supplied by the server.
 
@@ -27,7 +27,7 @@ For this checkout, a checksum-verified portable JDK and Gradle may exist under i
 1. Back up the server and player data. Test on a staging copy first.
 2. Stop the server, copy the JAR into `plugins`, then start Paper 26.3 using Java 25.
 3. Install Vault and an EssentialsX economy provider if rewards are wanted. Without a provider, gameplay remains available and payable settlements remain pending.
-4. Review `plugins/SimpleMobArena/config.yml`, `classes.yml` and `arenas/*.yml`. The supplied arena is disabled and has no preset spawn coordinates. Configure it at your actual arena above spawn.
+4. Review `plugins/SimpleMobArena/config.yml`, `classes.yml` and `arenas/*.yml`. Bundled example arenas are disabled and have no preset spawn coordinates. Configure them at your actual arenas. The separate [Spawn Arena configuration](fixed-config/spawn.yml) preserves the supplied server coordinates and is already enabled; install it only for that existing arena.
 5. Configure the arena geometry and spawns. All arena locations refer to an existing, loaded world; positions use `world,x,y,z,yaw,pitch`.
 6. Check `/ma admin setup <arena>` for the stored coordinates, height bounds, spawn counts and repair instructions. Resolve every validation error, then `/ma admin enable <arena> true`.
 7. Review `/ma admin economy` before running rewarded tests. Adjust limits to your SMP economy.
@@ -49,7 +49,9 @@ Example in-game setup, while standing at each intended location:
 
 Skip `create` if `spawn` already exists. Stand at opposite corners for `setpos1` and `setpos2`, including **different Y heights**. Corners enclose a nonzero three-dimensional volume, at most 256 blocks across in X/Z. Include the floor, combat area and sufficient air above it. Stand safely inside for player/mob spawns, and safely outside every arena for `setexit`. Spawns and exits need clear standing room above a dry, harmless supporting surface. Slabs and stairs are checked using their actual collision shapes; stand on the intended surface before saving the location. Overlapping arenas are rejected.
 
-`setplayer` and `setmob` **replace all existing points of that type** with your current location. Use `addplayer` or `addmob` for extra points. `clearspawns <arena> <player|mob|all>` removes the selected lists. Configuration edits require all arenas to be unoccupied. `setoutsider <arena> exit` clears any separate outsider destination so it follows `setexit`; omit `exit` to save a separate destination at your feet.
+Large mobs need suitable spawn pads: ravagers and iron golems need width, and endermen need roughly three blocks of height. At spawn time the plugin checks the mob's dimensions against block collision shapes and tries another configured point if needed. If none fits, the match is cancelled rather than leaving a mob stuck in blocks. Flying mobs need enough space inside the arena boundary to move and attack; configuring their type does not enlarge the arena.
+
+`setplayer` and `setmob` **replace all existing points of that type** with your current location. Use `addplayer` or `addmob` for extra points. `clearspawns <arena> <player|mob|red|blue|all>` removes the selected list; `all` removes player, mob and both team spawn lists. Configuration edits require all arenas to be unoccupied. `setoutsider <arena> exit` clears any separate outsider destination so it follows `setexit`; omit `exit` to save a separate destination at your feet.
 
 ### Repairing an arena configured with version 1.0.0
 
@@ -105,9 +107,17 @@ Leave WorldGuard's `block-plugin-spawning` enabled; changing region flags keeps 
 
 Start a new match after correcting the flags and verify both spawning and combat. Keep surrounding spawn protection in place. SimpleMobArena cancels a rejected wave without payout and logs the failure; it does not bypass the protection plugin.
 
+Arena creepers clear their explosion's affected block list and cannot start fires. They can still damage participants when WorldGuard permits that damage. An accepted explosion that WorldGuard later cancels still retires its tracked creeper safely, so the wave does not fail with a missing-mob error. A cancelled explosion prime leaves the creeper alive. Neither path uncancels WorldGuard events or awards a player kill for a self-explosion.
+
 When PlaceholderAPI is installed, the bundled expansion registers `%simplemobarena_arena%`, `state`, `wave`, `completed_waves`, `kills`, `pot`, `alive`, `estimated_reward`, `sessions`, `total_kills`, `highest_wave` and `total_earned` using that same prefix/suffix. Live values are sampled on the server thread every second; lifetime statistics refresh asynchronously at most once per minute. `total_earned` means confirmed earnings. Initial/unavailable cached values return `loading`; the cache covers online players. Estimated reward remains before eligibility and caps.
 
 ## Playing and administration
+
+Version 1.0.10 restores creepers with block protection and expands the supported roster to 28 mob types, including llamas. It adds occasional meme rounds, rare rapid-fire skeletons, themed arena examples, class loadout previews and a separate staff entry/build permission. Existing configuration files are preserved: add the new entries to your chosen pool or use one of the complete local-pool examples below. Existing creeper entries are now active again and are validated; malformed creeper settings must be repaired. Drowned remain excluded.
+
+Version 1.0.8 adds per-arena mob sets, potion kits, 1v1 duels and team duels. Existing arena files default to `mode: MOB_ARENA` and retain the global mob pool. Existing class/config files are preserved; merge the new fields below where needed. SQLite/MySQL ledger schema 5 upgrades automatically; retain backups for downgrades.
+
+Version 1.0.9 isolates class configuration failures from inventory recovery. An invalid class is unavailable until repaired; valid classes continue loading. A malformed classes file disables class choices, while personal gear remains available only when the configured equipment mode permits it. An invalid equipment mode disables new joins. Actual snapshot/database recovery failures still trigger recovery protection. Correct the reported YAML path and run `/ma admin reload` while arenas are idle; reload reports remaining equipment errors and cancels stale class lookups.
 
 `/mobarena` is the primary command; `/ma` is its alias. Run either with no arguments to open the arena inventory menu. Left-click an arena to choose equipment, or right-click for its details. The stats, matches, leaderboard and classes buttons open their own menus. Player information commands open the same screens; console commands retain text reports. Menus have back, refresh and page controls. Statistics load in the background; closing or replacing a menu discards its pending display update.
 
@@ -120,17 +130,23 @@ When PlaceholderAPI is installed, the bundled expansion registers `%simplemobare
 | `/ma stats` | `mobarena.stats` | Personal statistics |
 | `/ma stats <cached name\|UUID>` | `mobarena.stats.others` | Another player's statistics |
 | `/ma history [page]` | `mobarena.history` | Your paginated match and payout history |
+| `/ma duels [page]` | `mobarena.history` | Your separate duel history, teams and results |
 | `/ma history <cached name\|UUID> [page]` | `mobarena.history`, plus `mobarena.stats.others` for someone else | A player's paginated history |
 | `/ma match <session UUID>` | `mobarena.match` | Full match roster, recorded names, contributions, pot, outcome and settlement states |
 | `/ma top` | `mobarena.top` | Top players by kills, then highest wave; shows confirmed earnings |
 | `/ma admin create/delete <arena>` | `mobarena.admin.create` / `.delete` | Create disabled arena / remove idle configuration |
 | `/ma admin setplayer/setmob <arena>` | Matching `mobarena.admin.<action>` | Replace all player/mob spawns with your current location |
 | `/ma admin addplayer/addmob <arena>` | Matching `mobarena.admin.<action>` | Append an extra player/mob spawn |
-| `/ma admin clearspawns <arena> <player\|mob\|all>` | `mobarena.admin.clearspawns` | Clear selected spawn lists while unoccupied |
+| `/ma admin clearspawns <arena> <player\|mob\|red\|blue\|all>` | `mobarena.admin.clearspawns` | Clear the selected list; all includes both team spawn lists |
 | `/ma admin setexit/setpos1/setpos2 <arena>` | Matching `mobarena.admin.<action>` | Save the executing player's location |
 | `/ma admin setoutsider <arena> [exit]` | `mobarena.admin.setoutsider` | Save a separate safe outsider exit; `exit` uses the arena exit instead |
 | `/ma admin setup <arena>` | `mobarena.admin.setup` | Stored geometry, spawn counts, validation checklist and repair commands |
 | `/ma admin enable <arena> <true\|false>` | `mobarena.admin.enable` | Enable or disable an idle arena |
+| `/ma admin mode <arena> <MOB_ARENA\|DUEL\|TEAM_DUEL>` | `mobarena.admin.mode` | Change mode and disable the arena until setup is checked |
+| `/ma admin mobset <arena> <name\|default>` | `mobarena.admin.mobset` | Save a named pool or global selection; a local waves.mobs override still takes precedence |
+| `/ma admin teamselection <arena> <AUTO\|CHOOSE>` | `mobarena.admin.teamselection` | Set how teams are selected in a team duel |
+| `/ma admin setteam <arena> <red\|blue>` | `mobarena.admin.setteam` | Replace the team's spawn list with your location |
+| `/ma admin addteam <arena> <red\|blue>` | `mobarena.admin.addteam` | Add another spawn for the team |
 | `/ma admin start <arena>` | `mobarena.admin.start` | Start once minimum participation and valid spawns are satisfied |
 | `/ma admin stop <arena>` | `mobarena.admin.stop` | Cancel without payout and recover equipment |
 | `/ma admin forcewave <arena>` | `mobarena.admin.forcewave` | Skip an intermission only; never rewards an unfinished wave |
@@ -144,9 +160,160 @@ When PlaceholderAPI is installed, the bundled expansion registers `%simplemobare
 | `/ma admin payouts <session UUID>` | `mobarena.admin.payouts` | Settlement IDs, amounts, states, caps and provider errors |
 | `/ma admin reconcile <settlement UUID> [CONFIRM\|VOID]` | `mobarena.admin.reconcile` | Inspect instructions or record the verified outcome of an uncertain deposit |
 
-Player use/join/personal-stats/history/match/top permissions default to true. Other-player stats and all administrative permissions default to operators. `mobarena.admin` grants every administrative child permission. Console can run administrative and financial commands except commands needing an in-game location. Original `create`, `setspawn`, `start`, `stop` and `forcewave` spellings are accepted as aliases; `setspawn` now replaces mob spawns like `setmob`. Use YAML for maximum player counts.
+Player use/join/personal-stats/history/match/top permissions default to true. Other-player stats and administrative command permissions default to operators. `mobarena.admin` grants the administrative command children; it does not grant `mobarena.admin.bypass`. Console can run administrative and financial commands except commands needing an in-game location. Original `create`, `setspawn`, `start`, `stop` and `forcewave` spellings are accepted as aliases; `setspawn` now replaces mob spawns like `setmob`. Use YAML for maximum player counts.
+
+### Staff access during matches
+
+`mobarena.admin.bypass` allows a staff member who is not playing to enter and build inside an occupied arena. It defaults to **false**, including for operators, and is separate from `mobarena.admin`. Grant it explicitly to the account or staff group that needs it. For example, with LuckPerms:
+
+```text
+/lp user <name> permission set mobarena.admin.bypass true
+```
+
+Remove that grant with `/lp user <name> permission unset mobarena.admin.bypass`. WorldGuard and other plugins still control their own building restrictions. This permission does not allow outsiders to damage arena mobs or players, assist combat with potions, earn contributions, or take arena drops. A staff member who joins a match follows the normal participant rules. Pending equipment recovery also keeps its protections; the permission cannot bypass recovery.
 
 ## Session and equipment rules
+
+### Mob sets for each arena
+
+Define reusable pools under `mob-sets` in `config.yml`, then select one with `/ma admin mobset <arena> undead` or `mob-set: undead` in the arena file:
+
+```yaml
+mob-sets:
+  undead:
+    mobs:
+      ZOMBIE: {unlock-wave: 1, weight: 30}
+      HUSK: {unlock-wave: 2, weight: 10}
+      SKELETON: {unlock-wave: 3, weight: 12}
+```
+
+Only the listed types belong to that pool. Each row inherits that type's global `waves.mobs` settings, including gear and variant chances. An arena's own `waves.mobs` replaces the selected pool entirely; its rows inherit the corresponding global mob settings. Changing `mobset`, including choosing `default`, preserves that local override and reports when it remains active. To use the saved named/global selection, remove the arena's `waves.mobs` section and reload while idle. Setup shows the effective pool and saved selection. Named sets are case-sensitive and accept letters, numbers, underscores and hyphens. Equipment lists replace the inherited list for that slot; use `[]` to clear one. Unknown sets or malformed pools prevent that arena starting. Creepers are supported; drowned remain excluded. Ranged mobs still start at wave three or later.
+
+Other `waves` settings can also be overridden per arena, including counts, spawn batches, intermission, time limits, healing and player health scaling:
+
+```yaml
+# In arenas/spawn.yml
+mob-set: undead
+waves:
+  base-mobs: 8
+  mobs-per-wave-per-player: 2
+  player-health-scaling:
+    additional-player-multiplier: 0.2
+  mobs: # Optional: replaces undead with this arena's own pool.
+    ZOMBIE:
+      unlock-wave: 1
+      weight: 20
+      baby-chance: 0.1
+      equipment:
+        hand:
+          - {material: STONE_SWORD, chance: 0.5}
+        off_hand:
+          - {material: SHIELD, chance: 0.1}
+    SPIDER: {unlock-wave: 1, weight: 5}
+```
+
+Existing top-level arena `max-waves` and `max-active-mobs` take precedence over the corresponding `waves` values. Reload while arenas are idle after editing YAML.
+
+Supported mob names are:
+
+| Group | YAML entity names |
+| --- | --- |
+| Undead | `ZOMBIE`, `HUSK`, `SKELETON`, `STRAY`, `WITHER_SKELETON`, `ZOMBIFIED_PIGLIN` |
+| Ground creatures | `SPIDER`, `CAVE_SPIDER`, `SILVERFISH`, `ENDERMITE`, `CREEPER` |
+| Raiders | `PILLAGER`, `VINDICATOR`, `WITCH`, `RAVAGER`, `EVOKER` |
+| Nether mobs | `PIGLIN`, `PIGLIN_BRUTE`, `BLAZE` |
+| End and aerial mobs | `ENDERMAN`, `SHULKER`, `VEX`, `PHANTOM`, `BREEZE` |
+| Normally neutral mobs | `IRON_GOLEM`, `GOAT`, `LLAMA`, `BEE` |
+
+The earliest effective unlock is wave three for `SKELETON`, `STRAY`, `BLAZE`, `PILLAGER`, `WITCH`, `WITHER_SKELETON`, `SHULKER`, `BREEZE`, `EVOKER`, `PIGLIN`, `PHANTOM` and `LLAMA`. This protects the opening waves even when an older file sets an earlier unlock; later unlocks remain unchanged. It also applies to piglins configured with melee weapons. At least one other configured type must be available on wave one.
+
+Weights are relative chances among currently unlocked types, not percentages or fixed spawn counts. Earlier types remain in the pool as new types unlock. A weight-one ravager is a rare possibility, not a guaranteed boss. `difficulty-multiplier` scales health; mob count follows `base-mobs + wave × mobs-per-wave-per-player × starting players`, capped by `max-mobs-per-wave`.
+
+### Complete arena examples
+
+These files use their own `waves.mobs` pools and do not require named sets in `config.yml`. Copy the desired file into `plugins/SimpleMobArena/arenas/`, configure its actual geometry and spawns, then reload while all arenas are idle. The four bundled examples remain disabled until configured and enabled. Fresh installations receive them automatically; updating the JAR preserves the existing arena directory.
+
+| File | Waves / difficulty | Pool and limits |
+| --- | --- | --- |
+| [training-example.yml](src/main/resources/arenas/training-example.yml) | 12 / 0.75 | Zombies, spiders, husks, goats, llamas and bees; 24 concurrent, 36 per wave |
+| [raiders-example.yml](src/main/resources/arenas/raiders-example.yml) | 25 / 1.15 | Vindicators, pillagers, witches, creepers, evokers and rare golems/ravagers; 36 concurrent, 80 per wave |
+| [nether-example.yml](src/main/resources/arenas/nether-example.yml) | 25 / 1.10 | Zombified piglins, piglins, wither skeletons, blazes and piglin brutes; 32 concurrent, 72 per wave |
+| [sky-example.yml](src/main/resources/arenas/sky-example.yml) | 20 / 1.20 | Endermites, endermen, bees, breezes, phantoms, vexes and shulkers; 24 concurrent, 48 per wave; needs flight space and ranged equipment |
+| [fixed-config/spawn.yml](fixed-config/spawn.yml) | 30 / 1.00 | The supplied Spawn Arena, with every coordinate and exit preserved, all 28 types unlocked by wave 20, 40 concurrent and 100 per wave |
+
+The separate Spawn Arena file is already enabled and keeps one to four players and the 15-second countdown. Its milder health growth is 10% every five waves plus 10% per additional starting player, capped at 1.3 for player scaling. With four starters, wave 30 has 100 planned mobs; an ordinary zombie has 39 health points and a rare golem/ravager has 117. Its existing ten-block-high boundary is unchanged, so check flying encounters and large spawn pads in game. Rewards, payout eligibility and class kits still come from the global economy and equipment configuration.
+
+### Meme rounds and rare skeletons
+
+The new default configuration and complete Spawn Arena have a 12% chance of a meme round from wave four: Goat Stampede, Llama Drama or Bee Swarm. The theme is chosen once when the wave begins and applies to every spawn batch in that wave. Three ordinary waves must pass before another theme can occur; a theme on wave four makes wave eight the next eligible wave. Normal mob count, health scaling and reward rules still apply.
+
+```yaml
+# In config.yml or an individual arena file.
+waves:
+  meme-rounds:
+    enabled: true
+    chance: 0.12
+    minimum-wave: 4
+    cooldown-waves: 3
+    types:
+      goats: {name: 'Goat Stampede', weight: 1, mobs: [GOAT]}
+      llamas: {name: 'Llama Drama', weight: 1, mobs: [LLAMA]}
+      bees: {name: 'Bee Swarm', weight: 1, mobs: [BEE]}
+```
+
+Every mob in a theme must already belong to that arena's resolved pool and be unlocked for the current wave. A theme cannot introduce goats into a nether-only arena or bypass the early-wave ranged restriction. If no theme qualifies, the wave is ordinary. Theme `weight` controls the relative choice after the probability roll; a multi-type theme uses the existing mob weights within its chosen subset. Missing meme settings keep older installations disabled. Set `waves.meme-rounds.enabled: false` to turn the feature off. Training enables the three default themes, Sky Trials allows Bee Swarm, and the raider/nether examples disable them.
+
+Bow-equipped `SKELETON` mobs can also become a rare rapid-fire variant. The new default and Spawn Arena configure `rapid-fire: {chance: 0.02, minimum-wave: 8, interval-ticks: 8}` inside the skeleton's mob row: a 2% chance from wave eight, with eight ticks between shots. It still uses ordinary arrows, line of sight and a valid active target inside its own arena. Sword-equipped skeletons and other skeleton types do not receive this variant. Set its `chance` to `0` to disable it; older rows without the setting keep normal skeleton behavior.
+
+### Duels and team duels
+
+`DUEL` is one player per team with automatic assignment. `TEAM_DUEL` has two teams of `duel.team-size` players (default 2, maximum 16), using `duel.team-selection: AUTO` or `CHOOSE`. AUTO assigns the next player to the smaller team. CHOOSE opens red/blue selection after choosing equipment; `/ma join <arena> <class|personal> <red|blue>` also works. A full team rejects extra joins, including equipment preparations still in progress. Both teams must be full to start; ordinary `min-players`/`max-players` are ignored for duel modes.
+
+```yaml
+# Arena-specific fields; keep the existing world, cuboid and safe exit.
+mode: TEAM_DUEL
+duel:
+  team-size: 2
+  team-selection: CHOOSE
+  maximum-seconds: 300
+  red-spawns: []  # Set these in game with setteam/addteam.
+  blue-spawns: []
+```
+
+For a new arena, use `/ma admin create courtyard`, `/ma admin mode courtyard TEAM_DUEL`, the usual two corner commands, `/ma admin setteam courtyard red`, `/ma admin setteam courtyard blue`, and `/ma admin setexit courtyard`. Check `/ma admin setup courtyard`, then enable it. Mob spawns are not required. Team spawn points must be safe and inside the cuboid; multiple points are supported. Players wait at the configured player spawns (or combined team spawns when none are set), then move to their team's spawns when the match starts. Disabled sample files are packaged in the JAR and saved on fresh installations.
+
+Duels are single-round elimination matches. Friendly fire and outsider damage are blocked. Death, leaving, disconnecting or crossing the boundary removes a player; the last team with players alive wins. The time limit ends in a draw, and admin stop records a cancellation. There is no rejoin after a match starts. Duels use the same equipment recovery and command restrictions as mob arenas, but have no waves or cash payouts. PvP kills and damage are stored separately from mob statistics and class progression. `/ma duels` and the main menu's Recent duels button show the roster, teams, winner and each player's performance; `/ma match <UUID>` opens either match type.
+
+Multiple mob arenas and duels can run concurrently. They have separate state, teams, countdowns, timers and tagged projectiles. Enabled cuboids cannot overlap and exits must remain outside them. Neighbouring arenas that share a Minecraft chunk retain its plugin ticket until the last arena finishes.
+
+WorldGuard still controls whether damage is allowed. In the dedicated duel region, allow `pvp` and deny `invincible`, with priority above conflicting regions. Do not disable surrounding spawn protection. Cancelled protection events stay cancelled.
+
+### Drinkable and splash potion kits
+
+Add potions to empty slots in existing `classes.yml` kit definitions. `POTION` is drinkable; `SPLASH_POTION` is throwable. Use a Paper potion type such as `HEALING`, `STRONG_HEALING`, `SWIFTNESS` or `LONG_SWIFTNESS`:
+
+An old item field such as `potion-type: SWIFTNESS` must become `potion: {base-type: SWIFTNESS}`. The supplied corrected twelve-class server configuration is [fixed-config/classes.yml](fixed-config/classes.yml); it preserves the supplied kit balance and unlock thresholds and works with 1.0.8 or later.
+
+```yaml
+items:
+  '5':
+    material: POTION
+    potion:
+      base-type: HEALING
+  '6':
+    material: SPLASH_POTION
+    potion:
+      base-type: WATER
+      color: '#FF4477'
+      effects:
+        regeneration:
+          amplifier: 0
+          duration-ticks: 100
+```
+
+Custom effect amplifiers are zero-based, from 0 to 10; duration must be a positive whole number of ticks (20 ticks per second, use 1 for an instant effect). Optional `ambient`, `particles` and `icon` flags are booleans. A custom-only potion may omit `base-type` and uses WATER. Invalid types or effects fail validation instead of silently giving water. Potions occupy separate slots; lingering potions are rejected because arena clouds are disabled. Class equipment recovery preserves potion metadata.
+
+In duels, helpful splash potions affect the thrower and teammates, while harmful splashes affect opponents. A mixed potion counts as harmful. Splash effects cannot cross arenas or reach outsiders, and throws from departed players are blocked. Helpful potions also work between mob waves. Fresh class files include healing potion examples; existing class files are not overwritten.
 
 The central session state follows `WAITING → COUNTDOWN → ACTIVE → INTERMISSION → … → ENDING → FINISHED → WAITING`. A countdown falls back to waiting when too few players remain. Late joins and rejoining are rejected during ACTIVE and INTERMISSION. Disconnecting removes participation while retaining earned contribution. Participants are identified by UUID, not retained player objects. Each session has a unique ID.
 
@@ -170,11 +337,15 @@ The existing mob-count formula is retained. Health now gains 15% per player beyo
 
 Tune `waves.player-health-scaling.additional-player-multiplier` and `maximum-multiplier` in `config.yml`, or set `waves.player-health-scaling.enabled: false` to keep only the existing wave/mob/difficulty health scaling. Missing keys in older configs use the new defaults automatically. Invalid boolean, nonnumeric, nonfinite or out-of-range settings prevent arena entry and appear in the validation errors. Reload while arenas are idle to apply changes. Reward scaling and recorded starting-player counts retain their existing behavior.
 
-Spawns are spread across ticks and the active-mob cap includes tracked mounts. Supported mob types, unlock waves, weights and health multipliers are YAML settings. Zombies, husks and skeletons can use configured equipment variants; shield equipment does not imply custom shield-blocking AI. Rare zombie chicken jockeys are tracked and removed with their riders.
+Spawns are spread across ticks and the active-mob cap includes tracked chicken mounts and summoned vexes. Supported mob types, unlock waves, weights and health multipliers are YAML settings. Zombies, husks and skeletons can use configured equipment variants; shield equipment does not imply custom shield-blocking AI. Rare zombie chicken jockeys are tracked and removed with their riders; `chicken-jockey-chance` applies to `ZOMBIE` only.
 
-Creepers and drowned are excluded from arena waves. Existing `waves.mobs.CREEPER` and `waves.mobs.DROWNED` sections are ignored, including their old equipment settings, so an upgrade does not require replacing your configuration. Keep at least one other supported mob available from wave 1. Arena mob transformations are blocked, so arena zombies cannot turn into drowned in water. WorldGuard and arena block protections remain in force.
+Creepers explode without breaking arena blocks. Their self-explosions retire the tracked mob after damage resolves, without crediting a player kill. Endermen cannot pick up or place blocks, and arena mob block changes are blocked. Drowned remain excluded: legacy `waves.mobs.DROWNED` entries are ignored without rewriting the file. Arena transformations are blocked, so zombies cannot turn into drowned; piglins are kept immune to zombification. WorldGuard's spawning and damage decisions remain in force.
 
-Arena zombies, husks and skeleton-family mobs have daylight burning disabled during spawn setup. A second ignition guard protects owned mobs and clears pending fire ticks if sunlight tries to ignite them. This protection leaves fire/lava contact and attack-driven ignition unchanged; unrelated survival mobs keep their normal behavior.
+Arena zombies, husks, skeleton-family mobs and phantoms have daylight burning disabled during spawn setup. A second ignition guard protects owned mobs and clears pending fire ticks if sunlight tries to ignite them. This protection leaves fire/lava contact and attack-driven ignition unchanged; unrelated survival mobs keep their normal behavior.
+
+Normally neutral mobs are directed at their arena's active players: golems attack, goats ram, llamas spit, piglins fight even when a participant wears gold, and bees remain angry and able to sting. Bees do not pollinate crops or enter hives. Endermen and flying mobs remain tied to the arena; arena raiders do not join ordinary raids. These changes apply only to owned arena mobs.
+
+Evokers may have up to **three living summoned vexes each**, also limited by the arena's combined active-mob cap. Summons belong to their caster and are removed when it dies, when the wave finishes or when the match ends. They do not add planned wave enemies, player kills, damage contribution, class progress or reward share. A `VEX` selected directly from `waves.mobs` is an ordinary wave enemy and counts normally. Fangs and projectiles carry their session ownership; stale or cross-arena effects cannot assist another match.
 
 Enabled arena boundaries block unrelated creature spawns even while no match is running, including natural spawning, spawners, eggs and other plugins. Only mobs tagged for that exact arena's current session can spawn inside. Disabled arenas and locations outside enabled boundaries keep normal spawning; this rule does not remove creatures already present.
 
@@ -200,6 +371,8 @@ classes:
 ```
 
 Locked classes show their requirement and the player's progress. Direct commands and menu clicks use the same unlock check before touching inventory. Positive requirements are checked asynchronously against storage; failed or timed-out checks cannot equip the class. Players can cancel a pending check with `/ma leave`. Personal equipment and zero-kill classes do not require a successful statistics lookup.
+
+Class menus include a loadout preview for equipment, items, potions and effects before confirming the choice. Previewing a class does not equip it or unlock it. Confirmation still checks the current class, permission, saved kill requirement, arena state and equipment recovery conditions.
 
 Normal lethal damage is cancelled and becomes elimination. Remaining participants continue. Voluntary leavers and eliminated/disconnected players keep their recorded contribution. Item dropping, collection, containers, transfers, block edits, escape, cross-arena combat and outsider attacks are constrained to keep the physical arena isolated from SMP. Non-arena commands are blocked during participation, including alternate inventory/teleport commands. Configure `outsider-exit` using `/ma admin setoutsider` to move nonparticipants safely outside every arena. Class state is restored on exit/reconnect; a recovery failure pauses interaction and retains the saved inventory for administrator attention.
 
@@ -290,7 +463,7 @@ Storage is selected at startup. Stop the server before changing it. Changing the
 
 ### Offline migration
 
-The `migrateStorage` Gradle task copies between selected backends, including SQLite to MySQL, MySQL to SQLite and file-to-file copies. It requires a completely empty destination, preserves the source, and includes equipment snapshots, audit records, website source identity, revisions, exact queued payload bytes and delivery/backfill metadata. First upgrade the source to ledger schema 4 by running this plugin with website export disabled, then stop it. Keep both the server and any other database writer/publisher stopped for the entire migration.
+The `migrateStorage` Gradle task copies between selected backends, including SQLite to MySQL, MySQL to SQLite and file-to-file copies. It requires a completely empty destination, preserves the source, and includes equipment snapshots, audit records, mob and duel results, website source identity, revisions, exact queued payload bytes and delivery/backfill metadata. First upgrade the source to ledger schema 5 by running this plugin with website export disabled, then stop it. Keep both the server and any other database writer/publisher stopped for the entire migration.
 
 1. Stop Paper cleanly and back up the complete plugin directory and matching player data.
 2. Create source and target copies of the full `config.yml` with their respective `storage` sections. Do not switch the server's active configuration yet.
@@ -303,13 +476,15 @@ The `migrateStorage` Gradle task copies between selected backends, including SQL
 4. Check the tool's validation result before switching the active storage configuration. For a SQLite destination, place the migrated files in the plugin data directory while Paper is still stopped. Preserve the source backup.
 5. Start the server, verify `/ma admin economy`, sample `/ma stats` and `/ma history` results, and test an outstanding equipment recovery before reopening gameplay.
 
-Do not use migration to merge nonempty databases. If it fails, durable migration guards block use of the incomplete destination; retain both source and destination evidence and investigate before retrying. Migration refuses an undrained settlement outbox. Restore database connectivity, start the plugin long enough to drain the outbox, then stop it before migrating. Do not run the source and target as two active copies of the same plugin state: that would duplicate pending payment opportunities.
+Do not use migration to merge nonempty databases. If it fails, durable migration guards block use of the incomplete destination; retain both source and destination evidence and investigate before retrying. Migration refuses undrained settlement or duel outboxes. Restore database connectivity, start the plugin long enough to drain them, then stop it before migrating. Do not run the source and target as two active copies of the same plugin state: that would duplicate pending payment opportunities.
 
 ### Reporting and match history
 
 Plugin 1.0.6 includes a durable HTTPS publisher for `https://www.mineplay.co.uk/api/integrations/simple-mob-arena/v1/match-snapshots`. See [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md) for source/token setup, admin commands, retry behavior, backfill, thread boundaries and restore procedures. Export defaults to disabled until the website's source ID and credential are configured. The website retains its own PostgreSQL copy; the plugin remains on SQLite or MySQL.
 
 Give the website implementation agent both [WEBSITE_DATA_HANDOFF.md](WEBSITE_DATA_HANDOFF.md), which describes source data and reporting semantics, and [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md), which describes the implemented publisher. `/ma admin website status`, `backfill` and `retry <event UUID>` require `mobarena.admin.website`. Export SQL runs on the ledger worker and HTTP delivery on a separate bounded worker; website outages do not wait inside payment transactions.
+
+Version 1.0.8 also publishes separate `duel.snapshot` events to `https://www.mineplay.co.uk/api/integrations/simple-mob-arena/v1/duel-snapshots`. Give the website developer [DUELS_API_HANDOFF.md](DUELS_API_HANDOFF.md) to implement that new receiver and PostgreSQL reporting. It includes teams, winner, full roster, PvP kills, damage and participation time. The mob-match payload remains unchanged. Duel results use a local `duel-outbox/` before the schema 5 tables; preserve and drain it alongside `settlement-outbox/` during backups and migration.
 
 The SQL views `mobarena_leaderboard`, `mobarena_match_performance` and `mobarena_player_payout_history` expose reporting data for a future website. Use player UUIDs as identity; recorded names are labels. Intended payouts and confirmed earnings are separate. Only CONFIRMED payments count as earned money. Do not sum every intended settlement regardless of state, and do not use binary floating point for website money calculations. The leaderboard exposes confirmed earnings in integer minor units for aggregation.
 

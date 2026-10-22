@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /** Only the publisher's dedicated worker invokes send; this client never follows a redirect. */
 final class HttpWebsiteTransport implements WebsiteTransport {
     private final URI endpoint;
+    private final URI duelEndpoint;
     private final String token;
     private final Duration requestTimeout;
     private final HttpClient client;
@@ -33,12 +34,17 @@ final class HttpWebsiteTransport implements WebsiteTransport {
     private final AtomicBoolean closed = new AtomicBoolean();
 
     HttpWebsiteTransport(WebsiteExportSettings settings) {
-        this(settings.endpoint(), settings.token(), settings.connectTimeout(), settings.requestTimeout());
+        this(settings.endpoint(), settings.duelEndpoint(), settings.token(), settings.connectTimeout(), settings.requestTimeout());
     }
 
     // Package-private endpoint injection permits a local HTTP mock; production only takes validated settings.
     HttpWebsiteTransport(URI endpoint, String token, Duration connectTimeout, Duration requestTimeout) {
+        this(endpoint, endpoint.resolve("duel-snapshots"), token, connectTimeout, requestTimeout);
+    }
+
+    HttpWebsiteTransport(URI endpoint, URI duelEndpoint, String token, Duration connectTimeout, Duration requestTimeout) {
         this.endpoint = endpoint;
+        this.duelEndpoint = duelEndpoint;
         this.token = token;
         this.requestTimeout = requestTimeout;
         executor = new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(32), task -> {
@@ -52,7 +58,8 @@ final class HttpWebsiteTransport implements WebsiteTransport {
 
     @Override public Response send(WebsiteExportStore.Event event) throws IOException, InterruptedException {
         if (closed.get()) throw new IOException("TRANSPORT_CLOSED");
-        HttpRequest request = HttpRequest.newBuilder(endpoint).timeout(requestTimeout)
+        URI destination = event.kind() == WebsiteExportStore.Kind.DUEL ? duelEndpoint : endpoint;
+        HttpRequest request = HttpRequest.newBuilder(destination).timeout(requestTimeout)
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json")
                 .header("Authorization", "Bearer " + token)

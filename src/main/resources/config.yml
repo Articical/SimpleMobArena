@@ -16,6 +16,7 @@ website-export:
   # Configure once, then restart. /ma admin reload does not replace this worker.
   enabled: false
   endpoint: 'https://www.mineplay.co.uk/api/integrations/simple-mob-arena/v1/match-snapshots'
+  duel-endpoint: 'https://www.mineplay.co.uk/api/integrations/simple-mob-arena/v1/duel-snapshots'
   # Generate a new UUID for THIS ledger and register the same value on the website.
   # Once persisted, preserve it across restarts, backups and storage migrations.
   source-id: ''
@@ -75,7 +76,7 @@ waves:
     enabled: true
     additional-player-multiplier: 0.15 # +15% health per player beyond the first.
     maximum-multiplier: 2.5
-  max-active-mobs: 100 # Includes chicken mounts. Each rider is one kill.
+  max-active-mobs: 100 # Includes chicken mounts and summoned vexes. Each rider is one kill.
   max-mobs-per-wave: 500
   max-waves: 30
   spawn-interval-ticks: 10
@@ -83,10 +84,23 @@ waves:
   intermission-seconds: 8
   maximum-wave-seconds: 600 # Missing/stuck/expired waves cancel without rewards.
   heal-between-waves: true
+  # Occasionally replace a whole wave with a themed pool. Three ordinary waves
+  # must pass between themes. Only types already unlocked in this arena qualify.
+  # Older configs without this section keep meme rounds disabled.
+  meme-rounds:
+    enabled: true
+    chance: 0.12
+    minimum-wave: 4
+    cooldown-waves: 3
+    types:
+      goats: {name: 'Goat Stampede', weight: 1, mobs: [GOAT]}
+      llamas: {name: 'Llama Drama', weight: 1, mobs: [LLAMA]}
+      bees: {name: 'Bee Swarm', weight: 1, mobs: [BEE]}
   # Slots choose one alternative from the cumulative probabilities below.
   # Remaining probability means an empty slot. All drops and XP are suppressed.
   # Undead have sunlight burning disabled through Paper's API (not helmets).
-  # Creepers and drowned are excluded; legacy sections are ignored when loading.
+  # Arena creepers can hurt players but never destroy blocks. Endermen cannot move blocks.
+  # Drowned are excluded; legacy drowned sections are ignored when loading.
   # Waves 1-2 are melee-only. Ranged-capable types have a minimum unlock of 3,
   # including legacy configurations; later configured unlock waves are retained.
   mobs:
@@ -112,6 +126,8 @@ waves:
       unlock-wave: 3
       weight: 18
       health-multiplier: 1.0
+      # Rare bow-equipped variant; never appears before this wave.
+      rapid-fire: {chance: 0.02, minimum-wave: 8, interval-ticks: 8}
       equipment:
         hand:
           - {material: BOW, chance: 0.90}
@@ -168,6 +184,76 @@ waves:
       equipment:
         hand:
           - {material: IRON_AXE, chance: 1.0}
+    CREEPER:
+      unlock-wave: 4
+      weight: 5
+      health-multiplier: 1.0
+    SILVERFISH: {unlock-wave: 2, weight: 3, health-multiplier: 1.0}
+    ENDERMITE: {unlock-wave: 3, weight: 2, health-multiplier: 1.0}
+    GOAT: {unlock-wave: 4, weight: 3, health-multiplier: 1.0}
+    LLAMA: {unlock-wave: 4, weight: 3, health-multiplier: 1.0}
+    BEE: {unlock-wave: 5, weight: 3, health-multiplier: 1.0}
+    PILLAGER:
+      unlock-wave: 5
+      weight: 6
+      health-multiplier: 1.0
+      equipment:
+        hand:
+          - {material: CROSSBOW, chance: 1.0}
+    WITCH: {unlock-wave: 7, weight: 3, health-multiplier: 1.0}
+    ZOMBIFIED_PIGLIN:
+      unlock-wave: 7
+      weight: 5
+      health-multiplier: 1.0
+      equipment:
+        hand:
+          - {material: GOLDEN_SWORD, chance: 1.0}
+    PIGLIN:
+      unlock-wave: 8
+      weight: 4
+      health-multiplier: 1.0
+      equipment:
+        hand:
+          - {material: CROSSBOW, chance: 0.5}
+          - {material: GOLDEN_SWORD, chance: 0.5}
+    BREEZE: {unlock-wave: 9, weight: 2, health-multiplier: 0.9}
+    ENDERMAN: {unlock-wave: 10, weight: 3, health-multiplier: 0.85}
+    PHANTOM: {unlock-wave: 11, weight: 2, health-multiplier: 0.9}
+    PIGLIN_BRUTE:
+      unlock-wave: 12
+      weight: 2
+      health-multiplier: 0.8
+      equipment:
+        hand:
+          - {material: GOLDEN_AXE, chance: 1.0}
+    VEX:
+      unlock-wave: 13
+      weight: 2
+      health-multiplier: 0.9
+      equipment:
+        hand:
+          - {material: IRON_SWORD, chance: 1.0}
+    SHULKER: {unlock-wave: 14, weight: 2, health-multiplier: 0.8}
+    EVOKER: {unlock-wave: 16, weight: 1, health-multiplier: 0.9}
+    IRON_GOLEM: {unlock-wave: 18, weight: 1, health-multiplier: 0.6}
+    RAVAGER: {unlock-wave: 20, weight: 1, health-multiplier: 0.6}
+
+# Optional reusable pools. An arena selects one with mob-set: undead.
+# Only listed types spawn; each row inherits that type's global waves.mobs defaults.
+# Arena waves.mobs replaces the whole pool when supplied. Equipment slot lists
+# replace the inherited list for that slot; [] clears it.
+mob-sets:
+  undead:
+    mobs:
+      ZOMBIE: {unlock-wave: 1, weight: 30}
+      HUSK: {unlock-wave: 3, weight: 12}
+      SKELETON: {unlock-wave: 3, weight: 14}
+      STRAY: {unlock-wave: 5, weight: 5}
+      WITHER_SKELETON: {unlock-wave: 10, weight: 3}
+  spiders:
+    mobs:
+      SPIDER: {unlock-wave: 1, weight: 10}
+      CAVE_SPIDER: {unlock-wave: 6, weight: 3}
 
 economy:
   # Brief pause before sending rewards. 0 disables the pause; maximum 30 seconds.

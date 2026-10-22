@@ -1,6 +1,8 @@
 # Mineplay website export
 
-SimpleMobArena **1.0.6**, ledger schema **4**, publishes match snapshots to the website ingestion API. The website owns its PostgreSQL reporting copy. Paper continues to use SQLite or MySQL for the authoritative payout ledger.
+SimpleMobArena **1.0.8**, ledger schema **5**, publishes match snapshots to the website ingestion API. The website owns its PostgreSQL reporting copy. Paper continues to use SQLite or MySQL for the authoritative payout ledger.
+
+Duels use a separate `duel.snapshot` contract and `/v1/duel-snapshots` route. See [DUELS_API_HANDOFF.md](DUELS_API_HANDOFF.md) for the complete payload and required website work. The existing mob-match contract below is unchanged. The duel receiver must be implemented and deployed separately.
 
 The default destination is:
 
@@ -10,7 +12,7 @@ POST https://www.mineplay.co.uk/api/integrations/simple-mob-arena/v1/match-snaps
 
 ## Enable it
 
-1. Back up the plugin data and database. Install `SimpleMobArena-1.0.6.jar` and restart with export disabled to upgrade the ledger schema.
+1. Back up the plugin data and database. Install `SimpleMobArena-1.0.8.jar` and restart with export disabled to upgrade the ledger schema.
 2. Choose a new source UUID for this ledger, for example using `[guid]::NewGuid().ToString('D')` in PowerShell. Register it on the website as `Arena__SourceId`. If this ledger already has a source ID, use the existing one from `/ma admin website status` instead.
 3. Provision a random bearer credential of 32–1024 characters on the website as `Arena__IngestionToken`. Put the same value in the **Paper process environment** as `MINEPLAY_ARENA_INGESTION_TOKEN`. A hosting panel/service must pass the variable to Java; setting it in an unrelated shell is insufficient. Supported token characters are letters, digits, `.`, `_`, `~`, `+`, `/`, `=`, and `-`.
 4. Add this section to an existing `plugins/SimpleMobArena/config.yml`, using the registered UUID, then restart Paper:
@@ -19,6 +21,7 @@ POST https://www.mineplay.co.uk/api/integrations/simple-mob-arena/v1/match-snaps
 website-export:
   enabled: true
   endpoint: 'https://www.mineplay.co.uk/api/integrations/simple-mob-arena/v1/match-snapshots'
+  duel-endpoint: 'https://www.mineplay.co.uk/api/integrations/simple-mob-arena/v1/duel-snapshots'
   source-id: '<registered-source-uuid>'
   token-env: MINEPLAY_ARENA_INGESTION_TOKEN
   connect-timeout-seconds: 5
@@ -33,6 +36,8 @@ website-export:
 5. Run `/ma admin website status`. Play an eligible test match and verify the website's stored roster and confirmed earnings. Run `/ma admin website backfill` to publish historical matches, including changes made while export was disabled.
 
 The packaged configuration defaults to disabled and contains no source ID or credential. These settings are read at startup; `/ma admin reload` does not replace the export worker. URL changes and token rotation require a restart. HTTP, URL credentials, query strings, fragments and redirects are rejected. Use the final HTTPS ingestion URL directly; a redirect from another hostname will be quarantined.
+
+The duel endpoint must share the mob endpoint's host and effective port, with a different path. Both share authentication and publisher controls. Status totals, retry-by-event-ID and backfill include both kinds of results. Due events alternate between modes to avoid starvation. A missing duel route quarantines duel events until the receiver is available; an authentication failure suspends the shared publisher.
 
 A missing/invalid credential or mismatched source ID pauses export and reports a fixed diagnostic code. Ordinary payouts remain available. Correct the configuration, restart, then backfill changes recorded during the pause. Source identity is inserted only when valid export configuration explicitly enables this ledger. A persisted source ID can never be replaced by changing YAML.
 
@@ -109,7 +114,7 @@ Status and exporter logs use fixed codes, not bearer headers, payload bodies, ra
 
 ## Migration, backups and rollback
 
-Before offline SQLite/MySQL migration, run this plugin once with export disabled to upgrade the **source to ledger schema 4**, then stop all writers. The migration tool refuses schema 3 sources rather than modifying the source during copying. Drain the existing local settlement outbox first, as described in the README.
+Before offline SQLite/MySQL migration, run this plugin once with export disabled to upgrade the **source to ledger schema 5**, then stop all writers. The migration tool refuses older sources rather than modifying the source during copying. Drain the local settlement and duel outboxes first, as described in the README.
 
 Schema 4 adds:
 
@@ -119,9 +124,11 @@ Schema 4 adds:
 | `website_match_revisions` | Last allocated revision per session. |
 | `website_export_events` | Event/session UUIDs, revision, exact payload BLOB, creation time, attempts, next attempt, delivery state, failure code, acknowledgement time and acknowledged website revision. |
 
+Schema 5 adds `duels` and `duel_participants`, plus the equivalent duel publisher tables `website_duel_export_state`, `website_duel_revisions` and `website_duel_export_events`. Both kinds use the same source identity. These five tables are included in migration verification too.
+
 `migrateStorage` includes all these rows, including delivered and quarantined events, and verifies row counts and SHA-256 fingerprints. Payload BLOBs are compared as exact bytes. Preserve the same `source-id` and re-provision the secret environment variable on the destination; tokens are not migrated in the ledger.
 
-Never start both source and destination publishers, even temporarily. Keep the retired server stopped and revoke its access before switching ownership. This plugin does not provide distributed multi-server locking. Also preserve the local settlement outbox, equipment database/snapshots and matching player data; website export is not an equipment backup.
+Never start both source and destination publishers, even temporarily. Keep the retired server stopped and revoke its access before switching ownership. This plugin does not provide distributed multi-server locking. Also preserve the local settlement and duel outboxes, equipment database/snapshots and matching player data; website export is not an equipment backup.
 
 Restoring an older backup can lose revisions or payment evidence that the website already accepted. Keep export disabled after such a restore until the website receipts, durable plugin revisions and payment provider evidence have been reconciled. Do not reset revision counters, regenerate event IDs, change source UUIDs or delete conflicting receipts to make requests pass. If the full ledger and queue can be restored, replay the preserved events; otherwise agree an explicit website resynchronization/correction procedure before resuming. A stale acknowledgement means the website already has a newer revision, not that an old backup is safe to promote. Older plugin versions refuse the newer schema: rollback requires a coherent backup and the same recovery review.
 
@@ -136,4 +143,6 @@ Plugin tests also generate `build/contract-fixtures/*.json`. With the website ch
 ```
 
 This compiles the actual website DTO/validator read-only in a separate build directory, validates the emitted plugin bytes and compares immutable hashes across revisions. It does not deploy the website or prove authentication, PostgreSQL commits or live Paper behavior. Production acceptance still requires the deployed endpoint, matching source/token and verification of a real test match's confirmed results on the website.
+
+That helper checks the existing mob contract only. Duel tests emit `build/duel-contract-fixtures/*.json`; the website needs its new duel DTO, validator and importer tests against those fixtures before live duel delivery can be accepted.
 

@@ -54,7 +54,17 @@ public final class ArenaManager {
     }
     public Arena owner(Entity entity) { return arenas.values().stream().filter(a -> a.owns(entity)).findFirst().orElse(null); }
     public boolean occupied(Arena arena) { return arena != null && (!arena.activeIds().isEmpty() || arena.reservedCount()>0 || arena.isRunning()); }
+    /** Explicit staff access never applies to a match participant or pending inventory recovery. */
+    public boolean canBypass(Player player) {
+        return player.hasPermission("mobarena.admin.bypass")
+            && !membership.containsKey(player.getUniqueId())
+            && !plugin.getEquipmentService().isLocked(player.getUniqueId())
+            && !plugin.getEquipmentService().hasSnapshot(player.getUniqueId());
+    }
     public void join(Player player, String id, String selection) {
+        join(player,id,selection,null);
+    }
+    public void join(Player player, String id, String selection, String team) {
         if (!player.hasPermission("mobarena.join")) throw new IllegalStateException("You do not have permission to join.");
         if (player.getGameMode() != GameMode.SURVIVAL && player.getGameMode() != GameMode.ADVENTURE)
             throw new IllegalStateException("Switch to survival or adventure mode before joining.");
@@ -69,7 +79,12 @@ public final class ArenaManager {
         }
         if (membership.containsKey(player.getUniqueId()) || plugin.getEquipmentService().hasSnapshot(player.getUniqueId()))
             throw new IllegalStateException("You already joined or have equipment awaiting recovery.");
-        Arena arena = required(id); arena.reserve();
+        Arena arena = required(id);
+        if (arena.isDuel()) arena.reserve(player.getUniqueId(),team);
+        else {
+            if (team != null) throw new IllegalArgumentException("Teams are only available in duel arenas.");
+            arena.reserve();
+        }
         UUID playerId = player.getUniqueId(), session = arena.getSessionId(), preparation = UUID.randomUUID();
         membership.put(playerId,arena); preparing.put(playerId,preparation);
         plugin.getEquipmentService().prepare(player,selection,() -> {
@@ -78,7 +93,7 @@ public final class ArenaManager {
             if (!preparing.remove(playerId,preparation)) return;
             if (membership.get(playerId) != arena || !arena.getSessionId().equals(session)
                     || !player.isOnline() || Bukkit.getPlayer(playerId) != player) {
-                arena.releaseReservation();
+                releaseReservation(arena,playerId);
                 membership.remove(playerId,arena); plugin.getEquipmentService().restore(player,arena.definition().exit,() -> {}); return;
             }
             try { arena.joined(player); }
@@ -88,7 +103,7 @@ public final class ArenaManager {
             }
         },message -> {
             if (!preparing.remove(playerId,preparation)) return;
-            arena.releaseReservation();
+            releaseReservation(arena,playerId);
             membership.remove(playerId,arena); player.sendMessage(ArenaMessages.error(message));
         });
     }
@@ -96,7 +111,7 @@ public final class ArenaManager {
         Arena arena = membership.get(player.getUniqueId());
         if (arena == null) throw new IllegalStateException("You are not in an arena.");
         if (preparing.remove(player.getUniqueId()) != null) {
-            arena.releaseReservation(); membership.remove(player.getUniqueId());
+            releaseReservation(arena,player.getUniqueId()); membership.remove(player.getUniqueId());
             // Request recovery now; EquipmentService waits for the durable original and
             // skips kit application when preparation completes after a leave/disconnect.
             plugin.getEquipmentService().restore(player,null,() -> {});
@@ -108,13 +123,13 @@ public final class ArenaManager {
     public void release(UUID id) {
         Arena arena = membership.remove(id);
         if (preparing.remove(id) != null) {
-            if (arena != null) arena.releaseReservation();
+            if (arena != null) releaseReservation(arena,id);
             plugin.getEquipmentService().cancelPreparation(id);
         }
     }
     public void cancelReservations(Arena arena) {
         for (UUID id : new HashSet<>(preparing.keySet())) if (membership.get(id) == arena) {
-            preparing.remove(id); membership.remove(id); arena.releaseReservation();
+            preparing.remove(id); membership.remove(id); releaseReservation(arena,id);
             plugin.getEquipmentService().cancelPreparation(id);
             Player player = Bukkit.getPlayer(id);
             if (player != null) plugin.getEquipmentService().restore(player,null,() -> {});
@@ -129,7 +144,11 @@ public final class ArenaManager {
                     eject(p,arena);
         }
     }
+    private void releaseReservation(Arena arena, UUID player) {
+        if (arena.isDuel()) arena.releaseReservation(player); else arena.releaseReservation();
+    }
     public void eject(Player player, Arena arena) {
+        if (canBypass(player)) return;
         if (plugin.getEquipmentService().isLocked(player.getUniqueId())) return;
         Location exit = ArenaDefinition.read(arena.getConfiguration().getString("outsider-exit"));
         if (exit == null || at(exit) != null || !ArenaDefinition.safe(exit)) exit = arena.definition().exit;
@@ -154,7 +173,7 @@ public final class ArenaManager {
     }
     public void setLocation(String id,String key,Location location) {
         ensureIdle(); Arena a = required(id); YamlConfiguration c = a.getConfiguration();
-        if (!Set.of("player-spawns","mob-spawns","exit","pos1","pos2","outsider-exit").contains(key)) throw new IllegalArgumentException("Unknown location key.");
+        if (!Set.of("player-spawns","mob-spawns","duel.red-spawns","duel.blue-spawns","exit","pos1","pos2","outsider-exit").contains(key)) throw new IllegalArgumentException("Unknown location key.");
         checkLocation(location);
         if (key.endsWith("-spawns")) c.set(key,List.of(ArenaDefinition.write(location)));
         else c.set(key,ArenaDefinition.write(location));
@@ -163,7 +182,7 @@ public final class ArenaManager {
     }
     public void addSpawn(String id,String key,Location location) {
         ensureIdle(); Arena a = required(id); YamlConfiguration c = a.getConfiguration();
-        if (!Set.of("player-spawns","mob-spawns").contains(key)) throw new IllegalArgumentException("Choose player-spawns or mob-spawns.");
+        if (!Set.of("player-spawns","mob-spawns","duel.red-spawns","duel.blue-spawns").contains(key)) throw new IllegalArgumentException("Choose player, mob, red team or blue team spawns.");
         checkLocation(location);
         List<String> list = new ArrayList<>(c.getStringList(key));
         String value = ArenaDefinition.write(location);
@@ -172,15 +191,43 @@ public final class ArenaManager {
     }
     public void clearSpawns(String id,String type) {
         ensureIdle(); Arena a = required(id); YamlConfiguration c = a.getConfiguration();
-        if (!Set.of("player","mob","all").contains(type)) throw new IllegalArgumentException("Choose player, mob or all.");
-        if (!type.equals("mob")) c.set("player-spawns",List.of());
-        if (!type.equals("player")) c.set("mob-spawns",List.of());
+        List<String> keys = switch (type) {
+            case "player" -> List.of("player-spawns");
+            case "mob" -> List.of("mob-spawns");
+            case "red" -> List.of("duel.red-spawns");
+            case "blue" -> List.of("duel.blue-spawns");
+            case "all" -> List.of("player-spawns","mob-spawns","duel.red-spawns","duel.blue-spawns");
+            default -> throw new IllegalArgumentException("Choose player, mob, red, blue or all.");
+        };
+        keys.forEach(key -> c.set(key,List.of()));
         save(a.getId(),c); loadArenas();
     }
     public void useExitForOutsiders(String id) {
         ensureIdle(); Arena a = required(id);
         a.getConfiguration().set("outsider-exit",null);
         save(a.getId(),a.getConfiguration()); loadArenas();
+    }
+    public void setMode(String id, String value) {
+        ensureIdle(); Arena arena = required(id);
+        cloud.mineplay.mobarena.config.ArenaMode mode;
+        try { mode = cloud.mineplay.mobarena.config.ArenaMode.valueOf(value.toUpperCase(Locale.ROOT)); }
+        catch (IllegalArgumentException error) { throw new IllegalArgumentException("Choose MOB_ARENA, DUEL or TEAM_DUEL."); }
+        arena.getConfiguration().set("mode",mode.name());
+        arena.getConfiguration().set("enabled",false);
+        save(arena.getId(),arena.getConfiguration()); loadArenas();
+    }
+    public void setMobSet(String id, String value) {
+        ensureIdle(); Arena arena = required(id);
+        if (!value.equalsIgnoreCase("default") && (!value.matches("[A-Za-z0-9_-]+") || !plugin.getConfig().isConfigurationSection("mob-sets."+value+".mobs")))
+            throw new IllegalArgumentException("Unknown mob set. Add it under mob-sets in config.yml first.");
+        arena.getConfiguration().set("mob-set",value.equalsIgnoreCase("default") ? null : value);
+        save(arena.getId(),arena.getConfiguration()); loadArenas();
+    }
+    public void setTeamSelection(String id, String value) {
+        ensureIdle(); Arena arena = required(id);
+        if (!Set.of("AUTO","CHOOSE").contains(value.toUpperCase(Locale.ROOT))) throw new IllegalArgumentException("Choose AUTO or CHOOSE.");
+        arena.getConfiguration().set("duel.team-selection",value.toUpperCase(Locale.ROOT));
+        save(arena.getId(),arena.getConfiguration()); loadArenas();
     }
     private static void checkLocation(Location location) {
         if (location == null || location.getWorld() == null) throw new IllegalArgumentException("Stand in a loaded world to set a location.");

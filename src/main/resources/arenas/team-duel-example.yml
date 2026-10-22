@@ -1,0 +1,23 @@
+# Configure an existing space; this never creates worlds or changes blocks.
+# Disabled until corners, team spawns and a safe outside exit are configured.
+name: Team Duel Arena
+enabled: false
+mode: TEAM_DUEL
+world: world
+pos1: ''
+pos2: ''
+player-spawns: []
+exit: ''
+outsider-exit: ''
+countdown-seconds: 10
+worldguard-region: ''
+duel:
+  # Both teams must fill before starting; legacy min/max-players are ignored.
+  team-size: 2
+  # AUTO balances teams. CHOOSE lets players pick red or blue before the match.
+  team-selection: AUTO
+  maximum-seconds: 300
+  # /ma admin setteam team-duel-example red replaces that team's spawn list.
+  # Use addteam to append another spawn. Repeat either command with blue.
+  red-spawns: []
+  blue-spawns: []

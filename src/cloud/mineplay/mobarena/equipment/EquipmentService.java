@@ -83,8 +83,10 @@ public final class EquipmentService implements Listener {
     private final Map<UUID, Preparation> preparations = new HashMap<>();
     private final Set<UUID> locked = new HashSet<>();
     private final Set<UUID> internalChanges = new HashSet<>();
-    private Map<String, ClassKit> kits;
-    private String equipmentMode;
+    private Map<String, ClassKit> kits = Map.of();
+    private String equipmentMode = "DISABLED";
+    private List<String> configurationErrors = List.of();
+    private Set<String> disabledClasses = Set.of();
     private Function<UUID, CompletableFuture<Long>> lifetimeKillsLookup = id ->
             CompletableFuture.failedFuture(new IllegalStateException("Lifetime kills are not available"));
     private volatile boolean closing;
@@ -132,11 +134,32 @@ public final class EquipmentService implements Listener {
 
     public void reload() {
         requireMainThread();
-        String mode = plugin.getConfig().getString("equipment.mode", "BOTH").toUpperCase(Locale.ROOT);
-        if (!Set.of("PERSONAL", "CLASS", "BOTH").contains(mode)) throw new IllegalArgumentException("equipment.mode must be PERSONAL, CLASS or BOTH");
-        Map<String, ClassKit> replacement = ClassKit.load(new File(plugin.getDataFolder(), "classes.yml"));
+        List<String> errors = new ArrayList<>();
+        Set<String> unavailable = new HashSet<>();
+        Object configuredMode = plugin.getConfig().get("equipment.mode", "BOTH");
+        String mode = configuredMode instanceof String text ? text.toUpperCase(Locale.ROOT) : "DISABLED";
+        if (!Set.of("PERSONAL", "CLASS", "BOTH").contains(mode)) {
+            errors.add("config.yml: equipment.mode must be PERSONAL, CLASS or BOTH. Arena joins are disabled.");
+            mode = "DISABLED";
+        }
+        Map<String, ClassKit> replacement = Map.of();
+        try {
+            ClassKit.LoadResult loaded = ClassKit.loadAvailable(new File(plugin.getDataFolder(), "classes.yml"));
+            replacement = loaded.kits();
+            loaded.errors().forEach((id, detail) -> {
+                unavailable.add(id.toLowerCase(Locale.ROOT));
+                errors.add("classes.yml: class '"+id+"' is disabled: "+detail);
+            });
+        } catch (IllegalArgumentException error) {
+            errors.add("Classes are unavailable: "+error.getMessage());
+        }
         kits = replacement;
         equipmentMode = mode;
+        disabledClasses = Set.copyOf(unavailable);
+        configurationErrors = List.copyOf(errors);
+        for (String error : configurationErrors) plugin.getLogger().warning(error);
+        if (!configurationErrors.isEmpty()) plugin.getLogger().warning(
+            "Fix the equipment configuration, then use /ma admin reload while arenas are idle.");
         for (Preparation preparation : List.copyOf(preparations.values())) {
             UUID id = preparation.player().getUniqueId();
             if (preparations.remove(id, preparation)) {
@@ -147,6 +170,7 @@ public final class EquipmentService implements Listener {
     }
 
     public void reloadClasses() { reload(); }
+    public List<String> configurationErrors() { return configurationErrors; }
     /** The supplied function must queue its lookup and return without waiting for storage. */
     public void setLifetimeKillsLookup(Function<UUID, CompletableFuture<Long>> lookup) {
         requireMainThread();
@@ -154,19 +178,26 @@ public final class EquipmentService implements Listener {
     }
     public List<String> classNames() { return kits.keySet().stream().sorted().toList(); }
     public List<ClassChoice> classChoices() {
-        if (equipmentMode.equals("PERSONAL")) return List.of();
+        if (!equipmentMode.equals("CLASS") && !equipmentMode.equals("BOTH")) return List.of();
         return kits.values().stream().map(ClassKit::choice)
                 .sorted(Comparator.comparingLong(ClassChoice::requiredKills).thenComparing(ClassChoice::id)).toList();
     }
     public ClassChoice choice(String selection) {
         String normalized = normalizeChoice(selection);
-        ClassKit kit = equipmentMode.equals("PERSONAL") ? null : kits.get(normalized);
+        ClassKit kit = equipmentMode.equals("CLASS") || equipmentMode.equals("BOTH") ? kits.get(normalized) : null;
         return kit == null ? null : kit.choice();
+    }
+    /** Reads the already loaded kit on the server thread; no storage lookup or equipment change. */
+    public ClassPreview classPreview(String selection) {
+        requireMainThread();
+        ClassKit kit = equipmentMode.equals("CLASS") || equipmentMode.equals("BOTH")
+                ? kits.get(normalizeChoice(selection)) : null;
+        return kit == null ? null : new ClassPreview(kit.choice(), kit.inventory(), kit.armor(), kit.offhand(), kit.effects());
     }
     public List<String> availableChoices() {
         List<String> choices = new ArrayList<>();
-        if (!equipmentMode.equals("CLASS")) choices.add("PERSONAL");
-        if (!equipmentMode.equals("PERSONAL")) choices.addAll(classNames());
+        if (equipmentMode.equals("PERSONAL") || equipmentMode.equals("BOTH")) choices.add("PERSONAL");
+        if (equipmentMode.equals("CLASS") || equipmentMode.equals("BOTH")) choices.addAll(classNames());
         return List.copyOf(choices);
     }
     public boolean preserveDurability() { return plugin.getConfig().getBoolean("equipment.personal.preserve-durability", false); }
@@ -186,7 +217,11 @@ public final class EquipmentService implements Listener {
         }
         String choice = normalizeChoice(selection);
         if (!availableChoices().contains(choice)) {
-            failed.accept("Equipment choice is unavailable. Choose: " + String.join(", ", availableChoices()));
+            if (!choice.equals("PERSONAL") && disabledClasses.contains(choice))
+                failed.accept("That class is unavailable because its kit configuration is invalid. Ask an administrator to check classes.yml.");
+            else if (availableChoices().isEmpty())
+                failed.accept("Arena equipment is unavailable. Ask an administrator to check the configuration.");
+            else failed.accept("Equipment choice is unavailable. Choose: " + String.join(", ", availableChoices()));
             return;
         }
         ClassKit kit = kits.get(choice);

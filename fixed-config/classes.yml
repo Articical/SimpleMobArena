@@ -1,0 +1,911 @@
+# MinePlay SimpleMobArena - 12 classes for HARD difficulty.
+# Unlocks use lifetime arena kills. Equipment, effects and thresholds are preserved.
+# Potion contents use potion.base-type (SimpleMobArena 1.0.8 and later).
+classes:
+  recruit:
+    display-name: Recruit
+    items:
+      '0':
+        material: IRON_SWORD
+        enchantments:
+          sharpness: 1
+      '1':
+        material: BOW
+      '2':
+        material: ARROW
+        amount: 24
+      '3':
+        material: COOKED_BEEF
+        amount: 32
+      '4':
+        material: GOLDEN_APPLE
+        amount: 3
+    armor:
+      helmet:
+        material: IRON_HELMET
+        enchantments:
+          protection: 2
+      chestplate:
+        material: IRON_CHESTPLATE
+        enchantments:
+          protection: 2
+      leggings:
+        material: IRON_LEGGINGS
+        enchantments:
+          protection: 2
+      boots:
+        material: IRON_BOOTS
+        enchantments:
+          protection: 2
+    icon: STONE_SWORD
+    required-kills: 0
+    offhand:
+      material: SHIELD
+    effects:
+      resistance:
+        amplifier: 0
+        duration-ticks: -1
+  scout:
+    display-name: Scout
+    items:
+      '0':
+        material: IRON_SWORD
+        enchantments:
+          sharpness: 2
+      '1':
+        material: BOW
+      '2':
+        material: ARROW
+        amount: 48
+      '3':
+        material: COOKED_CHICKEN
+        amount: 16
+      '5':
+        material: SPLASH_POTION
+        potion:
+          base-type: SWIFTNESS
+      '4':
+        material: GOLDEN_APPLE
+        amount: 4
+    armor:
+      helmet:
+        material: IRON_HELMET
+        enchantments:
+          protection: 2
+      chestplate:
+        material: IRON_CHESTPLATE
+        enchantments:
+          protection: 2
+      leggings:
+        material: CHAINMAIL_LEGGINGS
+        enchantments:
+          protection: 2
+      boots:
+        material: IRON_BOOTS
+        enchantments:
+          feather_falling: 2
+          protection: 2
+    effects:
+      speed:
+        amplifier: 0
+        duration-ticks: -1
+      resistance:
+        amplifier: 0
+        duration-ticks: -1
+      regeneration:
+        amplifier: 0
+        duration-ticks: -1
+    icon: LEATHER_BOOTS
+    required-kills: 50
+  knight:
+    display-name: Knight
+    items:
+      '0':
+        material: IRON_SWORD
+        enchantments:
+          sharpness: 2
+      '1':
+        material: COOKED_BEEF
+        amount: 20
+      '2':
+        material: GOLDEN_APPLE
+        amount: 5
+    armor:
+      helmet:
+        material: IRON_HELMET
+        enchantments:
+          protection: 3
+      chestplate:
+        material: IRON_CHESTPLATE
+        enchantments:
+          protection: 3
+      leggings:
+        material: IRON_LEGGINGS
+        enchantments:
+          protection: 3
+      boots:
+        material: IRON_BOOTS
+        enchantments:
+          protection: 3
+    offhand:
+      material: SHIELD
+    icon: IRON_SWORD
+    required-kills: 0
+    effects:
+      resistance:
+        amplifier: 0
+        duration-ticks: -1
+  archer:
+    display-name: Archer
+    items:
+      '0':
+        material: BOW
+        enchantments:
+          power: 3
+          unbreaking: 2
+      '1':
+        material: IRON_SWORD
+        enchantments:
+          sharpness: 1
+      '2':
+        material: ARROW
+        amount: 64
+      '3':
+        material: ARROW
+        amount: 64
+      '4':
+        material: COOKED_BEEF
+        amount: 16
+      '5':
+        material: SPLASH_POTION
+        potion:
+          base-type: SLOWNESS
+      '6':
+        material: GOLDEN_APPLE
+        amount: 5
+    armor:
+      helmet:
+        material: IRON_HELMET
+        enchantments:
+          protection: 2
+      chestplate:
+        material: IRON_CHESTPLATE
+        enchantments:
+          protection: 2
+      leggings:
+        material: IRON_LEGGINGS
+        enchantments:
+          protection: 2
+      boots:
+        material: IRON_BOOTS
+        enchantments:
+          protection: 2
+    icon: BOW
+    required-kills: 100
+    effects:
+      resistance:
+        amplifier: 0
+        duration-ticks: -1
+  crossbowman:
+    display-name: Crossbowman
+    items:
+      '0':
+        material: CROSSBOW
+        enchantments:
+          quick_charge: 3
+          piercing: 3
+          unbreaking: 2
+      '1':
+        material: IRON_SWORD
+      '2':
+        material: ARROW
+        amount: 64
+      '3':
+        material: ARROW
+        amount: 64
+      '4':
+        material: COOKED_BEEF
+        amount: 20
+      '5':
+        material: SPLASH_POTION
+        potion:
+          base-type: WEAKNESS
+      '6':
+        material: SPLASH_POTION
+        potion:
+          base-type: WEAKNESS
+      '7':
+        material: GOLDEN_APPLE
+        amount: 6
+    armor:
+      helmet:
+        material: IRON_HELMET
+        enchantments:
+          protection: 3
+      chestplate:
+        material: IRON_CHESTPLATE
+        enchantments:
+          protection: 3
+      leggings:
+        material: IRON_LEGGINGS
+        enchantments:
+          protection: 3
+      boots:
+        material: IRON_BOOTS
+        enchantments:
+          protection: 3
+    icon: CROSSBOW
+    required-kills: 250
+    effects:
+      resistance:
+        amplifier: 0
+        duration-ticks: -1
+  rogue:
+    display-name: Rogue
+    items:
+      '0':
+        material: DIAMOND_SWORD
+        enchantments:
+          sharpness: 3
+      '1':
+        material: BOW
+        enchantments:
+          punch: 1
+      '2':
+        material: ARROW
+        amount: 48
+      '3':
+        material: COOKED_BEEF
+        amount: 16
+      '5':
+        material: SPLASH_POTION
+        potion:
+          base-type: POISON
+      '6':
+        material: SPLASH_POTION
+        potion:
+          base-type: POISON
+      '7':
+        material: SPLASH_POTION
+        potion:
+          base-type: POISON
+      '8':
+        material: GOLDEN_APPLE
+        amount: 8
+    armor:
+      helmet:
+        material: DIAMOND_HELMET
+        enchantments:
+          protection: 3
+      chestplate:
+        material: DIAMOND_CHESTPLATE
+        enchantments:
+          protection: 3
+      leggings:
+        material: IRON_LEGGINGS
+        enchantments:
+          protection: 3
+      boots:
+        material: DIAMOND_BOOTS
+        enchantments:
+          feather_falling: 3
+          protection: 3
+    effects:
+      speed:
+        amplifier: 1
+        duration-ticks: -1
+      resistance:
+        amplifier: 0
+        duration-ticks: -1
+      regeneration:
+        amplifier: 0
+        duration-ticks: -1
+    icon: DIAMOND_SWORD
+    required-kills: 750
+  tank:
+    display-name: Tank
+    items:
+      '0':
+        material: DIAMOND_SWORD
+        enchantments:
+          sharpness: 2
+      '1':
+        material: COOKED_BEEF
+        amount: 24
+      '5':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '6':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '3':
+        material: GOLDEN_APPLE
+        amount: 10
+    armor:
+      helmet:
+        material: DIAMOND_HELMET
+        enchantments:
+          protection: 3
+      chestplate:
+        material: DIAMOND_CHESTPLATE
+        enchantments:
+          protection: 3
+      leggings:
+        material: DIAMOND_LEGGINGS
+        enchantments:
+          protection: 3
+      boots:
+        material: DIAMOND_BOOTS
+        enchantments:
+          protection: 3
+    offhand:
+      material: SHIELD
+    effects:
+      resistance:
+        amplifier: 0
+        duration-ticks: -1
+      regeneration:
+        amplifier: 0
+        duration-ticks: -1
+    icon: SHIELD
+    required-kills: 500
+  berserker:
+    display-name: Berserker
+    items:
+      '0':
+        material: DIAMOND_AXE
+        enchantments:
+          sharpness: 4
+          unbreaking: 3
+      '1':
+        material: COOKED_BEEF
+        amount: 20
+      '5':
+        material: POTION
+        potion:
+          base-type: STRENGTH
+      '6':
+        material: POTION
+        potion:
+          base-type: STRENGTH
+      '3':
+        material: GOLDEN_APPLE
+        amount: 10
+    armor:
+      helmet:
+        material: DIAMOND_HELMET
+        enchantments:
+          protection: 3
+      chestplate:
+        material: DIAMOND_CHESTPLATE
+        enchantments:
+          protection: 3
+      leggings:
+        material: DIAMOND_LEGGINGS
+        enchantments:
+          protection: 3
+      boots:
+        material: DIAMOND_BOOTS
+        enchantments:
+          protection: 3
+    effects:
+      strength:
+        amplifier: 0
+        duration-ticks: -1
+      resistance:
+        amplifier: 0
+        duration-ticks: -1
+      regeneration:
+        amplifier: 0
+        duration-ticks: -1
+    icon: DIAMOND_AXE
+    required-kills: 1000
+  alchemist:
+    display-name: Alchemist
+    items:
+      '0':
+        material: DIAMOND_SWORD
+        enchantments:
+          sharpness: 3
+          unbreaking: 2
+      '1':
+        material: BOW
+        enchantments:
+          power: 3
+      '2':
+        material: ARROW
+        amount: 64
+      '3':
+        material: GOLDEN_APPLE
+        amount: 8
+      '4':
+        material: COOKED_BEEF
+        amount: 32
+      '5':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '6':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '7':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '8':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '9':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '10':
+        material: SPLASH_POTION
+        potion:
+          base-type: HARMING
+      '11':
+        material: SPLASH_POTION
+        potion:
+          base-type: HARMING
+      '12':
+        material: SPLASH_POTION
+        potion:
+          base-type: HARMING
+      '13':
+        material: SPLASH_POTION
+        potion:
+          base-type: HARMING
+      '14':
+        material: SPLASH_POTION
+        potion:
+          base-type: HARMING
+      '15':
+        material: SPLASH_POTION
+        potion:
+          base-type: REGENERATION
+      '16':
+        material: SPLASH_POTION
+        potion:
+          base-type: REGENERATION
+      '17':
+        material: SPLASH_POTION
+        potion:
+          base-type: REGENERATION
+      '18':
+        material: SPLASH_POTION
+        potion:
+          base-type: POISON
+      '19':
+        material: SPLASH_POTION
+        potion:
+          base-type: POISON
+      '20':
+        material: SPLASH_POTION
+        potion:
+          base-type: POISON
+      '21':
+        material: SPLASH_POTION
+        potion:
+          base-type: WEAKNESS
+      '22':
+        material: SPLASH_POTION
+        potion:
+          base-type: WEAKNESS
+    armor:
+      helmet:
+        material: DIAMOND_HELMET
+        enchantments:
+          protection: 3
+      chestplate:
+        material: DIAMOND_CHESTPLATE
+        enchantments:
+          protection: 3
+      leggings:
+        material: IRON_LEGGINGS
+        enchantments:
+          protection: 3
+      boots:
+        material: DIAMOND_BOOTS
+        enchantments:
+          protection: 3
+    effects:
+      fire_resistance:
+        amplifier: 0
+        duration-ticks: -1
+      speed:
+        amplifier: 0
+        duration-ticks: -1
+      regeneration:
+        amplifier: 0
+        duration-ticks: -1
+    icon: SPLASH_POTION
+    required-kills: 1500
+  paladin:
+    display-name: Paladin
+    items:
+      '0':
+        material: NETHERITE_SWORD
+        enchantments:
+          sharpness: 5
+          unbreaking: 3
+          fire_aspect: 2
+      '1':
+        material: GOLDEN_APPLE
+        amount: 12
+      '2':
+        material: COOKED_BEEF
+        amount: 48
+      '5':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '6':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '7':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '8':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '9':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '10':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '11':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '12':
+        material: SPLASH_POTION
+        potion:
+          base-type: REGENERATION
+      '13':
+        material: SPLASH_POTION
+        potion:
+          base-type: REGENERATION
+      '14':
+        material: SPLASH_POTION
+        potion:
+          base-type: REGENERATION
+      '15':
+        material: SPLASH_POTION
+        potion:
+          base-type: REGENERATION
+      '16':
+        material: SPLASH_POTION
+        potion:
+          base-type: REGENERATION
+      '17':
+        material: SPLASH_POTION
+        potion:
+          base-type: STRENGTH
+      '18':
+        material: SPLASH_POTION
+        potion:
+          base-type: STRENGTH
+    armor:
+      helmet:
+        material: NETHERITE_HELMET
+        enchantments:
+          protection: 4
+          unbreaking: 3
+      chestplate:
+        material: NETHERITE_CHESTPLATE
+        enchantments:
+          protection: 4
+          unbreaking: 3
+      leggings:
+        material: DIAMOND_LEGGINGS
+        enchantments:
+          protection: 4
+          unbreaking: 3
+      boots:
+        material: NETHERITE_BOOTS
+        enchantments:
+          protection: 4
+          unbreaking: 3
+          feather_falling: 4
+    offhand:
+      material: SHIELD
+      enchantments:
+        unbreaking: 3
+    effects:
+      regeneration:
+        amplifier: 0
+        duration-ticks: -1
+      resistance:
+        amplifier: 0
+        duration-ticks: -1
+      fire_resistance:
+        amplifier: 0
+        duration-ticks: -1
+    icon: GOLDEN_APPLE
+    required-kills: 2500
+  ranger:
+    display-name: Ranger
+    items:
+      '0':
+        material: BOW
+        enchantments:
+          power: 5
+          punch: 2
+          flame: 1
+          infinity: 1
+          unbreaking: 3
+      '1':
+        material: NETHERITE_SWORD
+        enchantments:
+          sharpness: 4
+          unbreaking: 3
+      '2':
+        material: ARROW
+        amount: 1
+      '3':
+        material: GOLDEN_APPLE
+        amount: 12
+      '4':
+        material: COOKED_BEEF
+        amount: 48
+      '5':
+        material: SPLASH_POTION
+        potion:
+          base-type: SLOWNESS
+      '6':
+        material: SPLASH_POTION
+        potion:
+          base-type: SLOWNESS
+      '7':
+        material: SPLASH_POTION
+        potion:
+          base-type: SLOWNESS
+      '8':
+        material: SPLASH_POTION
+        potion:
+          base-type: SLOWNESS
+      '9':
+        material: SPLASH_POTION
+        potion:
+          base-type: SLOWNESS
+      '10':
+        material: SPLASH_POTION
+        potion:
+          base-type: SLOWNESS
+      '11':
+        material: SPLASH_POTION
+        potion:
+          base-type: WEAKNESS
+      '12':
+        material: SPLASH_POTION
+        potion:
+          base-type: WEAKNESS
+      '13':
+        material: SPLASH_POTION
+        potion:
+          base-type: WEAKNESS
+      '14':
+        material: SPLASH_POTION
+        potion:
+          base-type: WEAKNESS
+      '15':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '16':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '17':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '18':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '19':
+        material: SPLASH_POTION
+        potion:
+          base-type: POISON
+      '20':
+        material: SPLASH_POTION
+        potion:
+          base-type: POISON
+      '21':
+        material: SPLASH_POTION
+        potion:
+          base-type: POISON
+    armor:
+      helmet:
+        material: DIAMOND_HELMET
+        enchantments:
+          protection: 4
+          unbreaking: 3
+      chestplate:
+        material: NETHERITE_CHESTPLATE
+        enchantments:
+          protection: 4
+          unbreaking: 3
+      leggings:
+        material: DIAMOND_LEGGINGS
+        enchantments:
+          protection: 4
+          unbreaking: 3
+      boots:
+        material: NETHERITE_BOOTS
+        enchantments:
+          protection: 4
+          feather_falling: 4
+          unbreaking: 3
+    effects:
+      speed:
+        amplifier: 1
+        duration-ticks: -1
+      jump_boost:
+        amplifier: 0
+        duration-ticks: -1
+      regeneration:
+        amplifier: 0
+        duration-ticks: -1
+    icon: BOW
+    required-kills: 4000
+  juggernaut:
+    display-name: Juggernaut
+    items:
+      '0':
+        material: NETHERITE_SWORD
+        enchantments:
+          sharpness: 5
+          fire_aspect: 2
+          knockback: 2
+          unbreaking: 3
+      '1':
+        material: GOLDEN_APPLE
+        amount: 32
+      '2':
+        material: COOKED_BEEF
+        amount: 64
+      '3':
+        material: NETHERITE_AXE
+        enchantments:
+          sharpness: 5
+          unbreaking: 3
+      '4':
+        material: ENCHANTED_GOLDEN_APPLE
+        amount: 4
+      '5':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '6':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '7':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '8':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '9':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '10':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '11':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '12':
+        material: SPLASH_POTION
+        potion:
+          base-type: HEALING
+      '13':
+        material: SPLASH_POTION
+        potion:
+          base-type: REGENERATION
+      '14':
+        material: SPLASH_POTION
+        potion:
+          base-type: REGENERATION
+      '15':
+        material: SPLASH_POTION
+        potion:
+          base-type: REGENERATION
+      '16':
+        material: SPLASH_POTION
+        potion:
+          base-type: REGENERATION
+      '17':
+        material: SPLASH_POTION
+        potion:
+          base-type: REGENERATION
+      '18':
+        material: SPLASH_POTION
+        potion:
+          base-type: HARMING
+      '19':
+        material: SPLASH_POTION
+        potion:
+          base-type: HARMING
+      '20':
+        material: SPLASH_POTION
+        potion:
+          base-type: HARMING
+      '21':
+        material: SPLASH_POTION
+        potion:
+          base-type: HARMING
+      '22':
+        material: SPLASH_POTION
+        potion:
+          base-type: HARMING
+      '23':
+        material: SPLASH_POTION
+        potion:
+          base-type: STRENGTH
+      '24':
+        material: SPLASH_POTION
+        potion:
+          base-type: STRENGTH
+      '25':
+        material: SPLASH_POTION
+        potion:
+          base-type: STRENGTH
+    armor:
+      helmet:
+        material: NETHERITE_HELMET
+        enchantments:
+          protection: 4
+          unbreaking: 3
+      chestplate:
+        material: NETHERITE_CHESTPLATE
+        enchantments:
+          protection: 4
+          unbreaking: 3
+      leggings:
+        material: NETHERITE_LEGGINGS
+        enchantments:
+          protection: 4
+          unbreaking: 3
+      boots:
+        material: NETHERITE_BOOTS
+        enchantments:
+          protection: 4
+          unbreaking: 3
+          feather_falling: 4
+    offhand:
+      material: SHIELD
+      enchantments:
+        unbreaking: 3
+    effects:
+      strength:
+        amplifier: 1
+        duration-ticks: -1
+      resistance:
+        amplifier: 1
+        duration-ticks: -1
+      regeneration:
+        amplifier: 1
+        duration-ticks: -1
+      fire_resistance:
+        amplifier: 0
+        duration-ticks: -1
+    icon: NETHERITE_CHESTPLATE
+    required-kills: 7500

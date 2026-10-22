@@ -29,6 +29,8 @@ class ArenaManagerSetupTest {
     private MockedStatic<SpawnSafety> safety;
     private ArenaManager manager;
     private World world;
+    private YamlConfiguration defaults;
+    private EquipmentService equipment;
 
     @BeforeEach void setup() {
         world = mock(World.class);
@@ -36,18 +38,137 @@ class ArenaManagerSetupTest {
         bukkit = mockStatic(Bukkit.class);
         bukkit.when(() -> Bukkit.getWorld("world")).thenReturn(world);
         safety = mockStatic(SpawnSafety.class);
-        YamlConfiguration defaults = new YamlConfiguration();
+        defaults = new YamlConfiguration();
         defaults.set("waves.mobs.ZOMBIE.unlock-wave",1);
+        defaults.set("mob-sets.undead.mobs.ZOMBIE.unlock-wave",1);
         SimpleMobArena plugin = mock(SimpleMobArena.class);
         when(plugin.getDataFolder()).thenReturn(directory.toFile());
         when(plugin.getConfig()).thenReturn(defaults);
         when(plugin.getLogger()).thenReturn(mock(Logger.class));
-        when(plugin.getEquipmentService()).thenReturn(mock(EquipmentService.class));
+        equipment = mock(EquipmentService.class);
+        when(plugin.getEquipmentService()).thenReturn(equipment);
         manager = new ArenaManager(plugin);
         manager.loadArenas();
     }
 
     @AfterEach void cleanup() { safety.close(); bukkit.close(); }
+
+    @Test void explicitStaffBypassAllowsAccessButNeverMembershipOrEquipmentRecovery() throws Exception {
+        Player staff = mock(Player.class);
+        java.util.UUID id = java.util.UUID.randomUUID();
+        when(staff.getUniqueId()).thenReturn(id);
+        assertFalse(manager.canBypass(staff));
+        when(staff.hasPermission("mobarena.admin.bypass")).thenReturn(true);
+        assertTrue(manager.canBypass(staff));
+        manager.eject(staff,mock(Arena.class));
+        verify(staff,never()).teleport(any(Location.class));
+        when(equipment.isLocked(id)).thenReturn(true);
+        assertFalse(manager.canBypass(staff));
+        when(equipment.isLocked(id)).thenReturn(false);
+        when(equipment.hasSnapshot(id)).thenReturn(true);
+        assertFalse(manager.canBypass(staff));
+        when(equipment.hasSnapshot(id)).thenReturn(false);
+        var field = ArenaManager.class.getDeclaredField("membership");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked") var membership = (java.util.Map<java.util.UUID,Arena>)field.get(manager);
+        membership.put(id,mock(Arena.class));
+        assertFalse(manager.canBypass(staff));
+        membership.remove(id);
+        assertTrue(manager.canBypass(staff));
+    }
+
+    @Test void bypassPermissionRequiresAnExplicitGrantEvenForAdministrators() throws Exception {
+        YamlConfiguration metadata = new YamlConfiguration();
+        metadata.options().pathSeparator('/');
+        metadata.load(Path.of("src/main/resources/plugin.yml").toFile());
+        assertEquals(false,metadata.get("permissions/mobarena.admin.bypass/default"));
+        assertFalse(metadata.getConfigurationSection("permissions/mobarena.admin/children").getKeys(false)
+            .contains("mobarena.admin.bypass"));
+    }
+
+    @Test void duelModeTeamSelectionAndSpawnsSurviveReloadWithoutRequiringMobSpawns() {
+        configured("duels",0);
+        manager.setMode("duels","TEAM_DUEL");
+        assertFalse(saved("duels").getBoolean("enabled"));
+        manager.setTeamSelection("duels","CHOOSE");
+        manager.setLocation("duels","duel.red-spawns",at(2.5,181,2.5));
+        manager.setLocation("duels","duel.blue-spawns",at(8.5,181,8.5));
+        manager.addSpawn("duels","duel.red-spawns",at(3.5,181,2.5));
+        manager.clearSpawns("duels","mob");
+        manager.loadArenas();
+        ArenaDefinition definition = manager.required("duels").definition();
+        assertTrue(definition.errors.isEmpty(),definition.errors.toString());
+        assertTrue(definition.chooseTeams);
+        assertEquals(4,definition.maxPlayers);
+        assertEquals(2,definition.redSpawns.size());
+        assertEquals(1,definition.blueSpawns.size());
+        assertTrue(definition.mobSpawns.isEmpty());
+        manager.setEnabled("duels",true);
+        assertTrue(manager.required("duels").definition().enabled);
+    }
+
+    @Test void mobSetSelectionIsSavedAndUnknownSetIsRejected() {
+        configured("spawn",0);
+        manager.setMobSet("spawn","undead");
+        assertEquals("undead",saved("spawn").getString("mob-set"));
+        assertThrows(IllegalArgumentException.class,() -> manager.setMobSet("spawn","missing"));
+        assertEquals("undead",saved("spawn").getString("mob-set"));
+        manager.setMobSet("spawn","default");
+        assertFalse(saved("spawn").contains("mob-set"));
+    }
+
+    @Test void mobSetNamesUseTheSameRulesAsArenaConfiguration() {
+        configured("spawn",0);
+        for (String name : List.of("UndeadElite", "_night-mobs", "z".repeat(50))) {
+            defaults.set("mob-sets."+name+".mobs.ZOMBIE.unlock-wave",1);
+            manager.setMobSet("spawn",name);
+            assertEquals(name,saved("spawn").getString("mob-set"));
+            assertEquals(name,manager.required("spawn").definition().mobSet);
+            assertTrue(manager.required("spawn").getValidationErrors().isEmpty());
+        }
+        defaults.set("mob-sets.bad.name.mobs.ZOMBIE.unlock-wave",1);
+        assertThrows(IllegalArgumentException.class,() -> manager.setMobSet("spawn","bad.name"));
+        assertEquals("z".repeat(50),saved("spawn").getString("mob-set"));
+    }
+
+    @Test void changingOrResettingMobSetPreservesTheLocalPool() throws Exception {
+        configured("spawn",0);
+        YamlConfiguration config = saved("spawn");
+        config.set("waves.mobs.SPIDER.unlock-wave",1);
+        config.set("waves.mobs.SPIDER.weight",9);
+        config.save(file("spawn").toFile());
+        manager.loadArenas();
+
+        manager.setMobSet("spawn","undead");
+        assertEquals(9,saved("spawn").getInt("waves.mobs.SPIDER.weight"));
+        assertEquals(List.of(org.bukkit.entity.EntityType.SPIDER),manager.required("spawn").definition().mobs.stream().map(ArenaDefinition.MobRule::type).toList());
+        manager.setMobSet("spawn","default");
+        assertFalse(saved("spawn").contains("mob-set"));
+        assertEquals(9,saved("spawn").getInt("waves.mobs.SPIDER.weight"));
+        assertEquals(List.of(org.bukkit.entity.EntityType.SPIDER),manager.required("spawn").definition().mobs.stream().map(ArenaDefinition.MobRule::type).toList());
+    }
+
+    @Test void clearingTeamSpawnsOnlyChangesTheRequestedTeamAndAllClearsEveryList() {
+        configured("duels",0);
+        manager.setMode("duels","TEAM_DUEL");
+        manager.setLocation("duels","duel.red-spawns",at(2.5,181,2.5));
+        manager.setLocation("duels","duel.blue-spawns",at(8.5,181,8.5));
+        manager.clearSpawns("duels","red");
+        assertTrue(saved("duels").getStringList("duel.red-spawns").isEmpty());
+        assertEquals(1,saved("duels").getStringList("duel.blue-spawns").size());
+        assertEquals(1,saved("duels").getStringList("player-spawns").size());
+        assertEquals(1,saved("duels").getStringList("mob-spawns").size());
+        manager.setLocation("duels","duel.red-spawns",at(2.5,181,2.5));
+        manager.clearSpawns("duels","blue");
+        assertTrue(saved("duels").getStringList("duel.blue-spawns").isEmpty());
+        assertEquals(1,saved("duels").getStringList("duel.red-spawns").size());
+        manager.setLocation("duels","duel.blue-spawns",at(8.5,181,8.5));
+        manager.clearSpawns("duels","all");
+        for (String key : List.of("player-spawns","mob-spawns","duel.red-spawns","duel.blue-spawns"))
+            assertTrue(saved("duels").getStringList(key).isEmpty(),key);
+        assertTrue(manager.required("duels").definition().playerSpawns.isEmpty(),"Cleared team lists cannot repopulate lobby fallback spawns.");
+        assertFalse(manager.required("duels").getValidationErrors().isEmpty());
+    }
 
     @Test void replacingExampleSpawnsThenAddingMoreSurvivesReload() throws Exception {
         manager.create("spawn");

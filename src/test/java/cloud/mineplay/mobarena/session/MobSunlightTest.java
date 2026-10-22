@@ -6,6 +6,7 @@ import org.bukkit.entity.Zombie;
 import org.bukkit.entity.AbstractSkeleton;
 import org.bukkit.entity.Drowned;
 import org.bukkit.entity.Husk;
+import org.bukkit.entity.Phantom;
 import org.junit.jupiter.api.Test;
 import static org.mockito.Mockito.*;
 
@@ -20,6 +21,12 @@ class MobSunlightTest {
         AbstractSkeleton skeleton=mock(AbstractSkeleton.class);
         MobSpawn.equip(skeleton,null);
         verify(skeleton).setShouldBurnInDay(false);
+    }
+    @Test void phantomsAreProtectedFromSunlightBeforeAndAfterSpawning() {
+        Phantom phantom = mock(Phantom.class);
+        MobSpawn.equip(phantom, null);
+        MobSpawn.protectFromSunlight(phantom);
+        verify(phantom, times(2)).setShouldBurnInDay(false);
     }
     @Test void babyVariationIsControlledByConfiguration() {
         Zombie zombie=mock(Zombie.class); YamlConfiguration config=new YamlConfiguration();

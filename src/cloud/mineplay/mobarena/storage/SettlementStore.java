@@ -1,5 +1,6 @@
 package cloud.mineplay.mobarena.storage;
 
+import cloud.mineplay.mobarena.duels.DuelResult;
 import cloud.mineplay.mobarena.economy.EconomySettings;
 import cloud.mineplay.mobarena.economy.MatchDetails;
 import cloud.mineplay.mobarena.economy.MatchPerformance;
@@ -31,6 +32,9 @@ public final class SettlementStore implements AutoCloseable {
     private final Connection connection;
     private final boolean mysql;
     private final WebsiteExportStore website;
+    private final WebsiteExportStore duelWebsite;
+    private final DuelStore duels;
+    private boolean preferDuelEvent;
 
     public SettlementStore(Path database) throws SQLException, IOException {
         this(DatabaseSettings.sqlite(database.toAbsolutePath().getParent()), database.getFileName().toString());
@@ -47,6 +51,8 @@ public final class SettlementStore implements AutoCloseable {
             throw exception;
         }
         website = new WebsiteExportStore(connection, mysql);
+        duelWebsite = new WebsiteExportStore(connection, mysql, WebsiteExportStore.Kind.DUEL);
+        duels = new DuelStore(connection);
     }
 
     private void migrate() throws SQLException, IOException {
@@ -64,13 +70,14 @@ public final class SettlementStore implements AutoCloseable {
                 version = rows.getInt(1);
             }
         }
-        if (version > 4) throw new SQLException("Ledger schema is newer than this plugin; refusing to downgrade");
-        for (int next = version + 1; next <= 4; next++) {
+        if (version > 5) throw new SQLException("Ledger schema is newer than this plugin; refusing to downgrade");
+        for (int next = version + 1; next <= 5; next++) {
             String resource = switch (next) {
                 case 1 -> mysql ? "/db/001-mysql.sql" : "/db/001-initial.sql";
                 case 2 -> "/db/002-match-details.sql";
                 case 3 -> mysql ? "/db/003-reporting-views-mysql.sql" : "/db/003-reporting-views.sql";
                 case 4 -> mysql ? "/db/004-website-export-mysql.sql" : "/db/004-website-export.sql";
+                case 5 -> mysql ? "/db/005-duels-mysql.sql" : "/db/005-duels.sql";
                 default -> throw new IllegalStateException();
             };
             String schema;
@@ -103,6 +110,25 @@ public final class SettlementStore implements AutoCloseable {
             for (UUID session : processing.stream().map(Settlement::sessionId).distinct().toList()) website.enqueue(session, now);
             return processing.size();
         });
+    }
+
+    /** PvP records never create payout rows, mob-kill totals, or PvE website events. */
+    public synchronized boolean recordDuel(DuelResult result) throws SQLException {
+        return recordDuel(result, Instant.now());
+    }
+
+    public synchronized boolean recordDuel(DuelResult result, Instant observedAt) throws SQLException {
+        return transaction(() -> {
+            boolean created = duels.record(result);
+            if (created) duelWebsite.enqueue(result.sessionId(), observedAt);
+            return created;
+        });
+    }
+
+    public synchronized DuelResult duelMatch(UUID sessionId) throws SQLException { return duels.match(sessionId); }
+
+    public synchronized List<DuelResult> duelHistory(UUID playerId, int page) throws SQLException {
+        return duels.history(playerId, page);
     }
 
     /** Atomically reserves all participants' caps before any external payment can happen. */
@@ -219,33 +245,62 @@ public final class SettlementStore implements AutoCloseable {
 
     /** All facade methods are intended for the background ledger worker, never the Paper thread. */
     public synchronized void configureWebsiteExport(boolean enabled, UUID sourceId, Instant now) throws SQLException {
-        transaction(() -> { website.configure(enabled, sourceId); return null; });
+        transaction(() -> { website.configure(enabled, sourceId); duelWebsite.configure(enabled, sourceId); return null; });
     }
 
     public synchronized List<WebsiteExportStore.Event> websiteEvents(Instant now, int limit) throws SQLException {
-        return website.events(now, limit);
+        int bounded = Math.clamp(limit, 1, 100);
+        var matches = website.events(now, bounded);
+        var duelEvents = duelWebsite.events(now, bounded);
+        if (duelEvents.isEmpty()) return matches;
+        if (matches.isEmpty()) return duelEvents;
+        var combined = new ArrayList<WebsiteExportStore.Event>();
+        int pve = 0, pvp = 0;
+        boolean nextDuel = preferDuelEvent;
+        preferDuelEvent = !preferDuelEvent;
+        while (combined.size() < bounded && (pve < matches.size() || pvp < duelEvents.size())) {
+            if ((nextDuel && pvp < duelEvents.size()) || pve >= matches.size()) combined.add(duelEvents.get(pvp++));
+            else combined.add(matches.get(pve++));
+            nextDuel = !nextDuel;
+        }
+        return List.copyOf(combined);
     }
 
     public synchronized void websiteDelivered(UUID eventId, long storedRevision, Instant now) throws SQLException {
-        transaction(() -> { website.delivered(eventId, storedRevision, now); return null; });
+        transaction(() -> { websiteForEvent(eventId).delivered(eventId, storedRevision, now); return null; });
     }
 
     public synchronized void websiteFailed(UUID eventId, String safeCode, Instant nextAttempt, boolean quarantine) throws SQLException {
-        transaction(() -> { website.failed(eventId, safeCode, nextAttempt, quarantine); return null; });
+        transaction(() -> { websiteForEvent(eventId).failed(eventId, safeCode, nextAttempt, quarantine); return null; });
     }
 
-    public synchronized WebsiteExportStore.Status websiteStatus() throws SQLException { return website.status(); }
+    public synchronized WebsiteExportStore.Status websiteStatus() throws SQLException {
+        var pve = website.status();
+        var pvp = duelWebsite.status();
+        Instant oldest = pve.oldestPendingAt() == null ? pvp.oldestPendingAt() : pvp.oldestPendingAt() == null
+                ? pve.oldestPendingAt() : pve.oldestPendingAt().isBefore(pvp.oldestPendingAt()) ? pve.oldestPendingAt() : pvp.oldestPendingAt();
+        Instant acknowledged = pve.lastAcknowledgedAt() == null ? pvp.lastAcknowledgedAt() : pvp.lastAcknowledgedAt() == null
+                ? pve.lastAcknowledgedAt() : pve.lastAcknowledgedAt().isAfter(pvp.lastAcknowledgedAt()) ? pve.lastAcknowledgedAt() : pvp.lastAcknowledgedAt();
+        return new WebsiteExportStore.Status(pve.sourceId() == null ? pvp.sourceId() : pve.sourceId(),
+                pve.pending() + pvp.pending(), pve.quarantined() + pvp.quarantined(), oldest, acknowledged,
+                pvp.lastFailure() == null ? pve.lastFailure() : "DUEL_" + pvp.lastFailure(),
+                pve.backfillActive() || pvp.backfillActive(), pvp.lastFailure() == null ? pve.lastFailureEventId() : pvp.lastFailureEventId());
+    }
 
     public synchronized boolean websiteRetry(UUID eventId, Instant now) throws SQLException {
-        return transaction(() -> website.retry(eventId, now));
+        return transaction(() -> websiteForEvent(eventId).retry(eventId, now));
     }
 
     public synchronized void websiteStartBackfill(Instant now) throws SQLException {
-        transaction(() -> { website.startBackfill(); return null; });
+        transaction(() -> { website.startBackfill(); duelWebsite.startBackfill(); return null; });
     }
 
     public synchronized int websiteBackfillBatch(int limit, Instant now) throws SQLException {
-        return transaction(() -> website.backfillBatch(limit, now));
+        return transaction(() -> website.backfillBatch(limit, now) + duelWebsite.backfillBatch(limit, now));
+    }
+
+    private WebsiteExportStore websiteForEvent(UUID eventId) throws SQLException {
+        return duelWebsite.contains(eventId) ? duelWebsite : website;
     }
 
     public synchronized List<Settlement> payouts(UUID session) throws SQLException {

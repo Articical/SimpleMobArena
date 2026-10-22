@@ -24,6 +24,7 @@ class WebsiteExportSettingsTest {
         assertFalse(settings.enabled());
         assertNull(settings.sourceId());
         assertEquals(WebsiteExportSettings.DEFAULT_ENDPOINT, settings.endpoint().toString());
+        assertEquals(WebsiteExportSettings.DEFAULT_DUEL_ENDPOINT, settings.duelEndpoint().toString());
         assertEquals(1, settings.concurrency());
         assertFalse(settings.toString().contains(TOKEN));
     }
@@ -68,6 +69,25 @@ class WebsiteExportSettingsTest {
         config.set("token", TOKEN);
         assertEquals("EXPORT_USE_TOKEN_ENV", assertThrows(IllegalArgumentException.class,
                 () -> WebsiteExportSettings.load(config, ignored -> TOKEN)).getMessage());
+    }
+
+    @Test void duelEndpointMustUseHttpsSameOriginAndADifferentRoute() {
+        for (String endpoint : new String[]{"http://www.mineplay.co.uk/duels", "https://secret@www.mineplay.co.uk/duels",
+                "https://www.mineplay.co.uk/duels?token=secret", "https://www.mineplay.co.uk/duels#fragment",
+                "https://www.mineplay.co.uk", WebsiteExportSettings.DEFAULT_ENDPOINT,
+                "https://WWW.MINEPLAY.CO.UK:443/api/integrations/simple-mob-arena/v1/match-snapshots"}) {
+            var config = config(); config.set("duel-endpoint", endpoint);
+            var error = assertThrows(IllegalArgumentException.class, () -> WebsiteExportSettings.load(config, ignored -> TOKEN));
+            assertEquals("EXPORT_DUEL_ENDPOINT_INVALID", error.getMessage());
+            assertNull(error.getCause());
+        }
+        for (String endpoint : new String[]{"https://another.example/duels", "https://www.mineplay.co.uk:444/duels"}) {
+            var config = config(); config.set("duel-endpoint", endpoint);
+            assertEquals("EXPORT_DUEL_ORIGIN_MISMATCH", assertThrows(IllegalArgumentException.class,
+                    () -> WebsiteExportSettings.load(config, ignored -> TOKEN)).getMessage());
+        }
+        var custom = config(); custom.set("endpoint", "https://staging.example/arena/match-snapshots");
+        assertEquals("https://staging.example/arena/duel-snapshots", WebsiteExportSettings.load(custom, ignored -> TOKEN).duelEndpoint().toString());
     }
 
     @Test void boundsConcurrencyTimeoutsBatchAndRetryConfiguration() {

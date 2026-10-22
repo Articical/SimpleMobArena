@@ -29,7 +29,15 @@ public final class SimpleMobArena extends JavaPlugin {
         instance = this; sessionKey = new NamespacedKey(this,"session");
         saveDefaultConfig();
         if (!new java.io.File(getDataFolder(),"classes.yml").exists()) saveResource("classes.yml",false);
-        if (!new java.io.File(getDataFolder(),"arenas").exists()) saveResource("arenas/spawn-example.yml",false);
+        if (!new java.io.File(getDataFolder(),"arenas").exists()) {
+            saveResource("arenas/spawn-example.yml",false);
+            saveResource("arenas/duel-example.yml",false);
+            saveResource("arenas/team-duel-example.yml",false);
+            saveResource("arenas/training-example.yml",false);
+            saveResource("arenas/raiders-example.yml",false);
+            saveResource("arenas/nether-example.yml",false);
+            saveResource("arenas/sky-example.yml",false);
+        }
         try {
             // Do not let Bukkit's permissive YAML loading silently substitute defaults.
             new org.bukkit.configuration.file.YamlConfiguration().load(new java.io.File(getDataFolder(),"config.yml"));
@@ -54,7 +62,10 @@ public final class SimpleMobArena extends JavaPlugin {
             // Nonpersistent tags also allow removal of stragglers saved by another plugin.
             for (World world : getServer().getWorlds()) for (var entity : world.getEntities())
                 if (entity.getPersistentDataContainer().has(sessionKey,PersistentDataType.STRING)) entity.remove();
-            getServer().getScheduler().runTaskTimer(this,() -> arenaManager.tick(++ticks),1,1);
+            getServer().getScheduler().runTaskTimer(this,() -> {
+                arenaManager.tick(++ticks);
+                arenaListener.tick();
+            },1,1);
             if (getServer().getPluginManager().isPluginEnabled("PlaceholderAPI")) {
                 try {
                     var expansion = new cloud.mineplay.mobarena.integration.MobArenaExpansion(this);

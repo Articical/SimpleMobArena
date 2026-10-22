@@ -1,5 +1,7 @@
 package cloud.mineplay.mobarena.economy;
 
+import cloud.mineplay.mobarena.duels.DuelResult;
+import cloud.mineplay.mobarena.storage.DuelOutbox;
 import cloud.mineplay.mobarena.storage.SettlementStore;
 import cloud.mineplay.mobarena.storage.DatabaseSettings;
 import cloud.mineplay.mobarena.storage.SettlementOutbox;
@@ -49,6 +51,7 @@ public final class EconomyService implements AutoCloseable {
     private volatile CompletableFuture<SettlementStore> ready;
     private final DatabaseSettings database;
     private final SettlementOutbox outbox;
+    private final DuelOutbox duelOutbox;
     private final AtomicBoolean pumping = new AtomicBoolean();
     private final BukkitTask pumpTask;
     private final BukkitTask reconnectTask;
@@ -89,6 +92,7 @@ public final class EconomyService implements AutoCloseable {
         notifications = new SettlementNotifier(plugin, () -> closing);
         database = DatabaseSettings.load(plugin.getConfig().getConfigurationSection("storage"), plugin.getDataFolder().toPath());
         outbox = new SettlementOutbox(plugin.getDataFolder().toPath().resolve("settlement-outbox"));
+        duelOutbox = new DuelOutbox(plugin.getDataFolder().toPath().resolve("duel-outbox"));
         WebsiteExportSettings exportSettings;
         try {
             exportSettings = suppliedWebsiteSettings != null ? suppliedWebsiteSettings
@@ -149,6 +153,35 @@ public final class EconomyService implements AutoCloseable {
 
     public CompletableFuture<PlayerStatistics> stats(UUID player) {
         return submit(store -> { try { return store.stats(player); } catch (Exception error) { throw new CompletionException(error); } });
+    }
+
+    /** Durably record a completed duel without adding PvP kills to mob rewards or class unlocks. */
+    public CompletableFuture<Void> finishDuel(DuelResult result) {
+        if (closing) return CompletableFuture.failedFuture(new IllegalStateException("Ledger is shutting down"));
+        CompletableFuture<SettlementStore> current = ready;
+        return CompletableFuture.runAsync(() -> {
+            try { duelOutbox.save(result); }
+            catch (Exception exception) { throw new CompletionException(exception); }
+        }, outboxWriter).thenRunAsync(() -> {
+            try {
+                current.join().recordDuel(result);
+                duelOutbox.remove(result.sessionId());
+            } catch (Exception exception) { throw new CompletionException(exception); }
+        }, worker).whenComplete((ignored, error) -> { if (error != null) failLedger(error); });
+    }
+
+    public CompletableFuture<List<DuelResult>> duelHistory(UUID playerId, int page) {
+        return submit(store -> {
+            try { return store.duelHistory(playerId, page); }
+            catch (Exception error) { throw new CompletionException(error); }
+        });
+    }
+
+    public CompletableFuture<DuelResult> duelMatch(UUID sessionId) {
+        return submit(store -> {
+            try { return store.duelMatch(sessionId); }
+            catch (Exception error) { throw new CompletionException(error); }
+        });
     }
 
     public CompletableFuture<List<PlayerStatistics>> top(int limit) {
@@ -365,6 +398,11 @@ public final class EconomyService implements AutoCloseable {
                     outbox.remove(entry.result().sessionId());
                     logger.info("Recovered durable session result " + entry.result().sessionId());
                 }
+                for (DuelResult result : duelOutbox.entries()) {
+                    opened.recordDuel(result);
+                    duelOutbox.remove(result.sessionId());
+                    logger.info("Recovered durable duel result " + result.sessionId());
+                }
                 ledgerError = null;
                 return opened;
             } catch (Exception exception) {
@@ -401,7 +439,7 @@ public final class EconomyService implements AutoCloseable {
         outboxWriter.shutdown();
         try {
             if (!outboxWriter.awaitTermination(10, TimeUnit.SECONDS)) {
-                logger.severe("Local settlement outbox is still writing. Do not force-stop the process; preserve settlement-outbox for recovery.");
+                logger.severe("Local match outboxes are still writing. Do not force-stop the process; preserve settlement-outbox and duel-outbox for recovery.");
             }
         } catch (InterruptedException exception) { Thread.currentThread().interrupt(); }
         // Queued writes finish first. No Vault call is made during shutdown.

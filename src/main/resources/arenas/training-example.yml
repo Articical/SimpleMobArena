@@ -1,0 +1,75 @@
+# Easy, 12 waves. Configure corners/spawns/exit with /ma admin setup training-example.
+# Keep disabled until configured. These files never build or alter the arena.
+name: Training Grounds
+enabled: false
+mode: MOB_ARENA
+world: world
+pos1: ''
+pos2: ''
+player-spawns: []
+mob-spawns: []
+exit: ''
+outsider-exit: ''
+worldguard-region: ''
+min-players: 1
+max-players: 4
+countdown-seconds: 15
+difficulty-multiplier: 0.75
+max-active-mobs: 24
+max-waves: 12
+# This pool is local; no named mob set is required. Weights are relative chances.
+# Counts use starting players even after eliminations; difficulty scales health only.
+waves:
+  base-mobs: 3
+  mobs-per-wave-per-player: 1
+  max-mobs-per-wave: 36
+  spawn-interval-ticks: 15
+  spawn-batch-size: 1
+  intermission-seconds: 12
+  maximum-wave-seconds: 600
+  heal-between-waves: true
+  meme-rounds:
+    enabled: true
+    chance: 0.12
+    minimum-wave: 4
+    cooldown-waves: 3
+    types:
+      goats: {name: 'Goat Stampede', weight: 1, mobs: [GOAT]}
+      llamas: {name: 'Llama Drama', weight: 1, mobs: [LLAMA]}
+      bees: {name: 'Bee Swarm', weight: 1, mobs: [BEE]}
+  health-increase-percent: 5
+  health-increase-every-waves: 5
+  player-health-scaling:
+    enabled: true
+    additional-player-multiplier: 0.05
+    maximum-multiplier: 1.15
+  mobs:
+    ZOMBIE:
+      unlock-wave: 1
+      weight: 30
+      health-multiplier: 1.0
+      baby-chance: 0.03
+      chicken-jockey-chance: 0.005
+      equipment:
+        hand: [{material: WOODEN_SWORD, chance: 0.10}]
+        off_hand: []
+        head: []
+        chest: []
+        legs: []
+        feet: []
+    SPIDER: {unlock-wave: 1, weight: 10, health-multiplier: 1.0}
+    GOAT: {unlock-wave: 3, weight: 4, health-multiplier: 0.85}
+    LLAMA: {unlock-wave: 4, weight: 3, health-multiplier: 0.85}
+    BEE: {unlock-wave: 5, weight: 2, health-multiplier: 0.85}
+    HUSK:
+      unlock-wave: 6
+      weight: 8
+      health-multiplier: 1.0
+      baby-chance: 0
+      equipment:
+        hand: [{material: WOODEN_AXE, chance: 0.10}]
+        off_hand: []
+        head: []
+        chest: []
+        legs: []
+        feet: []

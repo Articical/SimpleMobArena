@@ -45,6 +45,7 @@ class CitizensArenaNpcTest {
     private ArenaManager manager;
     private EquipmentService equipment;
     private Player player;
+    private World world;
     private Location location;
     private CitizensArenaNpc menus;
     private FakeAccess access;
@@ -69,7 +70,9 @@ class CitizensArenaNpcTest {
         when(scheduler.runTask(eq(plugin), any(Runnable.class))).thenAnswer(call -> {
             scheduled.add(call.getArgument(1)); return mock(BukkitTask.class);
         });
-        location = new Location(mock(World.class), 20.5, 64, 20.5);
+        // Location holds its world weakly. Keep the test world alive for the whole fixture.
+        world = mock(World.class);
+        location = new Location(world, 20.5, 64, 20.5);
         player = mock(Player.class); UUID playerId = UUID.randomUUID();
         when(player.getUniqueId()).thenReturn(playerId); when(player.getLocation()).thenReturn(location);
         when(player.isOnline()).thenReturn(true); when(player.hasPermission(anyString())).thenReturn(true);

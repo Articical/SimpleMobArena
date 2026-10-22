@@ -1,0 +1,20 @@
+# Configure an existing space; this never creates worlds or changes blocks.
+# Disabled until corners, team spawns and a safe outside exit are configured.
+name: Duel Arena
+enabled: false
+mode: DUEL
+world: world
+pos1: ''
+pos2: ''
+# Optional waiting positions; an empty list uses the team spawn points.
+player-spawns: []
+exit: ''
+outsider-exit: ''
+countdown-seconds: 10
+worldguard-region: ''
+duel:
+  # DUEL always starts with exactly two players. No mob spawns are needed.
+  maximum-seconds: 300
+  # Set with /ma admin setteam duel-example red (then repeat with blue).
+  red-spawns: []
+  blue-spawns: []

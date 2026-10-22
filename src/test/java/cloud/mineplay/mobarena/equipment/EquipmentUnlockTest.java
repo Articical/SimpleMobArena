@@ -64,6 +64,7 @@ class EquipmentUnlockTest {
         when(plugin.isEnabled()).thenReturn(true);
         when(plugin.getConfig()).thenReturn(new YamlConfiguration());
         when(plugin.getDataFolder()).thenReturn(directory.toFile());
+        when(plugin.getLogger()).thenReturn(mock(java.util.logging.Logger.class));
         player = mock(Player.class);
         playerId = UUID.randomUUID();
         when(player.getUniqueId()).thenReturn(playerId);
@@ -102,6 +103,20 @@ class EquipmentUnlockTest {
 
     private void drainMain() {
         while (!mainTasks.isEmpty()) mainTasks.remove().run();
+    }
+
+    @Test void previewsUseLoadedKitsWithoutReadingKillsOrPreparingEquipment() {
+        assertEquals("archer", equipment.classPreview(" CLASS:ARCHER ").choice().id());
+        assertEquals(100, equipment.classPreview("archer").choice().requiredKills());
+        assertNull(equipment.classPreview("missing"));
+        assertNull(equipment.classPreview("personal"));
+        assertFalse(equipment.isLocked(playerId));
+        assertFalse(equipment.hasSnapshot(playerId));
+        assertFalse(kills.isDone());
+        verifyNoInteractions(store, worker, ready, failed);
+        snapshots.verify(() -> PlayerSnapshot.capture(any(), anyBoolean()), never());
+        bukkit.when(Bukkit::isPrimaryThread).thenReturn(false);
+        assertThrows(IllegalStateException.class, () -> equipment.classPreview("archer"));
     }
 
     @ParameterizedTest @ValueSource(strings = { "archer", "ARCHER", "CLASS:archer", " cLaSs: ArChEr " })
@@ -196,6 +211,49 @@ class EquipmentUnlockTest {
         verifyNoMoreInteractions(failed);
         verifyNoInteractions(store, worker, ready);
         assertFalse(equipment.isLocked(playerId));
+    }
+
+    @Test void invalidClassReloadDisablesOldKitsCancelsLookupAndCanBeRepaired() throws Exception {
+        equipment.prepare(player, "archer", ready, failed);
+        Files.writeString(directory.resolve("classes.yml"), "classes: [broken\n");
+        equipment.reloadClasses();
+        assertEquals(List.of("PERSONAL"), equipment.availableChoices());
+        assertFalse(equipment.configurationErrors().isEmpty());
+        assertNull(equipment.choice("archer"));
+        assertFalse(equipment.isLocked(playerId));
+        completeLookup(100);
+        verify(failed).accept("Classes have changed. Please choose your class again.");
+        verifyNoMoreInteractions(failed);
+        verifyNoInteractions(store, worker, ready);
+        Files.writeString(directory.resolve("classes.yml"), "classes:\n  knight:\n    required-kills: 0\n");
+        equipment.reloadClasses();
+        assertTrue(equipment.configurationErrors().isEmpty());
+        assertEquals(List.of("PERSONAL", "knight"), equipment.availableChoices());
+    }
+
+    @Test void classOnlyModeNeverFallsBackToPersonalGearWhenAllClassesAreInvalid() throws Exception {
+        plugin.getConfig().set("equipment.mode", "CLASS");
+        Files.writeString(directory.resolve("classes.yml"), "classes:\n  scout:\n    required-kills: -1\n");
+        equipment.reloadClasses();
+        assertTrue(equipment.availableChoices().isEmpty());
+        equipment.prepare(player, "scout", ready, failed);
+        verify(failed).accept(contains("kit configuration is invalid"));
+        equipment.prepare(player, "PERSONAL", ready, failed);
+        verify(failed).accept(contains("Arena equipment is unavailable"));
+        verifyNoInteractions(store, worker, ready);
+    }
+
+    @Test void invalidEquipmentModeBlocksAdmissionWithoutBlockingRecoveryService() throws Exception {
+        plugin.getConfig().set("equipment.mode", "CLAS");
+        Files.writeString(directory.resolve("classes.yml"), "classes:\n  knight:\n    required-kills: 0\n");
+        equipment.reloadClasses();
+        assertTrue(equipment.availableChoices().isEmpty());
+        assertTrue(equipment.classChoices().isEmpty());
+        assertNull(equipment.choice("knight"));
+        assertTrue(equipment.configurationErrors().stream().anyMatch(error -> error.contains("equipment.mode")));
+        equipment.prepare(player, "PERSONAL", ready, failed);
+        verify(failed).accept(contains("Arena equipment is unavailable"));
+        verifyNoInteractions(store, worker, ready);
     }
 
     @Test void overlappingRequestsDoNotReplaceThePendingCheck() {

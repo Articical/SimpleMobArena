@@ -1,0 +1,83 @@
+# Hard, 25 waves. May be used in any existing world, including an Overworld arena.
+# Configure with /ma admin setup nether-example. Piglins stay as piglins.
+name: Nether Gauntlet
+enabled: false
+mode: MOB_ARENA
+world: world
+pos1: ''
+pos2: ''
+player-spawns: []
+mob-spawns: []
+exit: ''
+outsider-exit: ''
+worldguard-region: ''
+min-players: 1
+max-players: 4
+countdown-seconds: 15
+difficulty-multiplier: 1.10
+max-active-mobs: 32
+max-waves: 25
+waves:
+  base-mobs: 4
+  mobs-per-wave-per-player: 1
+  max-mobs-per-wave: 72
+  spawn-interval-ticks: 12
+  spawn-batch-size: 2
+  intermission-seconds: 10
+  maximum-wave-seconds: 900
+  heal-between-waves: true
+  meme-rounds:
+    enabled: false
+  health-increase-percent: 10
+  health-increase-every-waves: 5
+  player-health-scaling:
+    enabled: true
+    additional-player-multiplier: 0.10
+    maximum-multiplier: 1.30
+  mobs:
+    ZOMBIFIED_PIGLIN:
+      unlock-wave: 1
+      weight: 30
+      health-multiplier: 1.0
+      baby-chance: 0.06
+      equipment:
+        hand: [{material: GOLDEN_SWORD, chance: 0.90}, {material: GOLDEN_AXE, chance: 0.10}]
+        off_hand: []
+        head: []
+        chest: []
+        legs: []
+        feet: []
+    PIGLIN:
+      unlock-wave: 3
+      weight: 14
+      health-multiplier: 1.0
+      equipment:
+        hand: [{material: CROSSBOW, chance: 0.50}, {material: GOLDEN_SWORD, chance: 0.50}]
+        off_hand: []
+        head: [{material: GOLDEN_HELMET, chance: 0.10}]
+        chest: []
+        legs: []
+        feet: []
+    WITHER_SKELETON:
+      unlock-wave: 5
+      weight: 9
+      health-multiplier: 1.0
+      equipment:
+        hand: [{material: STONE_SWORD, chance: 0.80}, {material: IRON_SWORD, chance: 0.20}]
+        off_hand: []
+        head: []
+        chest: []
+        legs: []
+        feet: []
+    BLAZE: {unlock-wave: 7, weight: 6, health-multiplier: 0.85}
+    PIGLIN_BRUTE:
+      unlock-wave: 12
+      weight: 3
+      health-multiplier: 0.70
+      equipment:
+        hand: [{material: GOLDEN_AXE, chance: 1.0}]
+        off_hand: []
+        head: []
+        chest: []
+        legs: []
+        feet: []

@@ -98,6 +98,27 @@ class WebsitePublisherTest {
         }
     }
 
+    @Test void duelSnapshotRetainsKindIdentityAndBytesThroughLostResponseAndAcknowledgement() {
+        var sample = event();
+        var original = new WebsiteExportStore.Event(sample.eventId(), sample.sessionId(), sample.revision(),
+                sample.payload(), 0, WebsiteExportStore.Kind.DUEL);
+        FakeLedger ledger = new FakeLedger(original);
+        AtomicInteger attempts = new AtomicInteger();
+        try (WebsitePublisher publisher = publisher(ledger, event -> {
+            assertEquals(WebsiteExportStore.Kind.DUEL, event.kind());
+            assertEquals(original.eventId(), event.eventId());
+            assertArrayEquals(original.payload(), event.payload());
+            if (attempts.getAndIncrement() == 0) throw new IOException("lost response");
+            return ack(event, "duplicate", original.revision());
+        })) {
+            publisher.runBatch();
+            assertEquals("NETWORK_ERROR", ledger.failures.getFirst().code());
+            publisher.runBatch();
+            assertEquals(1, ledger.acknowledged.size());
+            assertNull(ledger.pending);
+        }
+    }
+
     @Test void quarantinesOperatorErrorsAndRedirectsButRetriesRateLimitsTimeoutsAndServerErrors() {
         for (int status : new int[]{302, 400, 401, 403, 404, 409, 413, 415, 422, 408, 429, 500, 502, 503}) {
             FakeLedger ledger = new FakeLedger(event());
@@ -354,7 +375,7 @@ class WebsitePublisherTest {
             failures.add(new Failure(eventId, safeCode, nextAttempt, quarantine));
             if (quarantine) pending = null;
             else pending = new WebsiteExportStore.Event(pending.eventId(), pending.sessionId(), pending.revision(),
-                    pending.payload(), pending.attempts() + 1);
+                    pending.payload(), pending.attempts() + 1, pending.kind());
             if (afterFailure != null) afterFailure.run();
             return CompletableFuture.completedFuture(null);
         }

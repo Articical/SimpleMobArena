@@ -11,8 +11,11 @@ import org.bukkit.configuration.ConfigurationSection;
 public final class WebsiteExportSettings {
     public static final String DEFAULT_ENDPOINT =
             "https://www.mineplay.co.uk/api/integrations/simple-mob-arena/v1/match-snapshots";
+    public static final String DEFAULT_DUEL_ENDPOINT =
+            "https://www.mineplay.co.uk/api/integrations/simple-mob-arena/v1/duel-snapshots";
     private final boolean enabled;
     private final URI endpoint;
+    private final URI duelEndpoint;
     private final UUID sourceId;
     private final String token;
     private final Duration connectTimeout;
@@ -22,11 +25,12 @@ public final class WebsiteExportSettings {
     private final Duration pollInterval;
     private final int batchSize;
 
-    private WebsiteExportSettings(boolean enabled, URI endpoint, UUID sourceId, String token,
+    private WebsiteExportSettings(boolean enabled, URI endpoint, URI duelEndpoint, UUID sourceId, String token,
             Duration connectTimeout, Duration requestTimeout, Duration retryBase, Duration retryMaximum,
             Duration pollInterval, int batchSize) {
         this.enabled = enabled;
         this.endpoint = endpoint;
+        this.duelEndpoint = duelEndpoint;
         this.sourceId = sourceId;
         this.token = token;
         this.connectTimeout = connectTimeout;
@@ -55,6 +59,17 @@ public final class WebsiteExportSettings {
                 || endpoint.getRawPath() == null || endpoint.getRawPath().isBlank()) {
             throw invalid("EXPORT_ENDPOINT_INVALID");
         }
+        URI duelEndpoint;
+        try { duelEndpoint = URI.create(string(section, "duel-endpoint", endpoint.resolve("duel-snapshots").toString())); }
+        catch (RuntimeException exception) { throw invalid("EXPORT_DUEL_ENDPOINT_INVALID"); }
+        if (!"https".equalsIgnoreCase(duelEndpoint.getScheme()) || duelEndpoint.getHost() == null
+                || duelEndpoint.getHost().isBlank() || duelEndpoint.getRawUserInfo() != null
+                || duelEndpoint.getRawQuery() != null || duelEndpoint.getRawFragment() != null
+                || duelEndpoint.getPort() == 0 || duelEndpoint.getPort() > 65535
+                || duelEndpoint.getRawPath() == null || duelEndpoint.getRawPath().isBlank()
+                || duelEndpoint.normalize().getRawPath().equals(endpoint.normalize().getRawPath())) throw invalid("EXPORT_DUEL_ENDPOINT_INVALID");
+        if (!duelEndpoint.getHost().equalsIgnoreCase(endpoint.getHost())
+                || effectivePort(duelEndpoint) != effectivePort(endpoint)) throw invalid("EXPORT_DUEL_ORIGIN_MISMATCH");
         String configuredId = string(section, "source-id", "");
         UUID sourceId = null;
         if (!configuredId.isEmpty()) {
@@ -87,7 +102,7 @@ public final class WebsiteExportSettings {
         Duration poll = seconds(section, "poll-interval-seconds", 5, 1, 300);
         int batchSize = integer(section, "batch-size", 10, 1, 100);
         if (integer(section, "concurrency", 1, 1, 1) != 1) throw invalid("EXPORT_CONCURRENCY_INVALID");
-        return new WebsiteExportSettings(enabled, endpoint, sourceId, token, connect, request,
+        return new WebsiteExportSettings(enabled, endpoint, duelEndpoint, sourceId, token, connect, request,
                 retryBase, retryMaximum, poll, batchSize);
     }
 
@@ -122,9 +137,11 @@ public final class WebsiteExportSettings {
     }
 
     private static IllegalArgumentException invalid(String safeCode) { return new IllegalArgumentException(safeCode); }
+    private static int effectivePort(URI endpoint) { return endpoint.getPort() == -1 ? 443 : endpoint.getPort(); }
 
     public boolean enabled() { return enabled; }
     public URI endpoint() { return endpoint; }
+    public URI duelEndpoint() { return duelEndpoint; }
     public UUID sourceId() { return sourceId; }
     String token() { return token; }
     public Duration connectTimeout() { return connectTimeout; }

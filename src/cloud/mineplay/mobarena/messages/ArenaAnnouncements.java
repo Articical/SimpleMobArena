@@ -87,6 +87,14 @@ public final class ArenaAnnouncements {
         send(publicEnd, participants, ignored -> ArenaMessages.info(body));
     }
 
+    public void duelFinished(boolean cancelled, String winner, Collection<Player> participants) {
+        for (Player participant : recipients(copyParticipants(participants)).values()) clearCountdown(participant);
+        String outcome = cancelled ? " was cancelled." : "DRAW".equals(winner) ? " ended in a draw."
+            : ": " + ("RED".equals(winner) ? "Red" : "Blue") + " team wins!";
+        send(publicEnd, participants, ignored -> ArenaMessages.info(Component.text(arenaName,NamedTextColor.GOLD)
+            .append(Component.text(outcome,cancelled ? NamedTextColor.RED : NamedTextColor.GREEN))));
+    }
+
     /** Clear only titles owned by this lobby; match/elimination titles must remain untouched. */
     public void clearCountdown(Player player) {
         if (player == null) return;

@@ -30,6 +30,11 @@ public final class StorageMigration {
             new Table("website_export_state", "id", false),
             new Table("website_match_revisions", "session_id", false),
             new Table("website_export_events", "event_id", false),
+            new Table("duels", "session_id", false),
+            new Table("duel_participants", "session_id,player_id", false),
+            new Table("website_duel_export_state", "id", false),
+            new Table("website_duel_revisions", "session_id", false),
+            new Table("website_duel_export_events", "event_id", false),
             new Table("equipment_snapshots", "player_uuid", true));
     private static final Set<String> DECIMALS = Set.of("prize_pot", "unallocated_pot", "share", "gross_amount", "intended_amount");
 
@@ -72,6 +77,9 @@ public final class StorageMigration {
         for (DatabaseSettings backend : List.of(source, target)) {
             if (!new SettlementOutbox(backend.directory().resolve("settlement-outbox")).entries().isEmpty()) {
                 throw new IllegalArgumentException("Undrained settlement outbox in " + backend.directory() + "; restore the source connection and let the plugin drain it before migrating");
+            }
+            if (!new DuelOutbox(backend.directory().resolve("duel-outbox")).entries().isEmpty()) {
+                throw new IllegalArgumentException("Undrained duel outbox in " + backend.directory() + "; restore the source connection and let the plugin drain it before migrating");
             }
         }
         if (!source.mysql()) {
@@ -133,7 +141,7 @@ public final class StorageMigration {
     }
 
     private static void validateSource(Connections connections, boolean mysql) throws SQLException {
-        for (var pair : Map.of("ledger", 4, "equipment", 1).entrySet()) {
+        for (var pair : Map.of("ledger", 5, "equipment", 1).entrySet()) {
             Connection connection = pair.getKey().equals("equipment") ? connections.equipment : connections.ledger;
             String sql = mysql ? "SELECT version FROM mobarena_schema WHERE component='" + pair.getKey() + "'" : "PRAGMA user_version";
             try (var statement = connection.createStatement(); var rows = statement.executeQuery(sql)) {

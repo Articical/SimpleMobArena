@@ -78,6 +78,34 @@ class HttpWebsiteTransportTest {
         } finally { server.stop(0); }
     }
 
+    @Test void duelEventsUseTheirOwnRouteAndSameAuthenticationAndIdempotencyHeaders() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        var ordinary = event();
+        var duel = new WebsiteExportStore.Event(ordinary.eventId(), ordinary.sessionId(), ordinary.revision(),
+                ordinary.payload(), 0, WebsiteExportStore.Kind.DUEL);
+        AtomicInteger pveCalls = new AtomicInteger();
+        AtomicReference<byte[]> received = new AtomicReference<>();
+        AtomicReference<String> authorization = new AtomicReference<>(), key = new AtomicReference<>();
+        server.createContext("/matches", exchange -> {
+            pveCalls.incrementAndGet(); exchange.sendResponseHeaders(200, -1); exchange.close();
+        });
+        server.createContext("/duels", exchange -> {
+            received.set(exchange.getRequestBody().readAllBytes());
+            authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            key.set(exchange.getRequestHeaders().getFirst("Idempotency-Key"));
+            exchange.sendResponseHeaders(200, -1); exchange.close();
+        });
+        server.start();
+        try (var transport = new HttpWebsiteTransport(endpoint(server, "/matches"), endpoint(server, "/duels"),
+                WebsiteExportSettingsTest.TOKEN, Duration.ofSeconds(1), Duration.ofSeconds(2))) {
+            assertEquals(200, transport.send(duel).status());
+            assertEquals(0, pveCalls.get());
+            assertArrayEquals(duel.payload(), received.get());
+            assertEquals("Bearer " + WebsiteExportSettingsTest.TOKEN, authorization.get());
+            assertEquals(duel.eventId().toString(), key.get());
+        } finally { server.stop(0); }
+    }
+
     @Test void boundsStalledResponseBodyAfterHeadersAndCloseCancelsAnInFlightSend() throws Exception {
         for (boolean close : new boolean[]{false, true}) {
             HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);

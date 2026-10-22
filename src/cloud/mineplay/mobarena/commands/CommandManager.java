@@ -25,8 +25,8 @@ import java.util.function.Consumer;
 
 /** Command dispatch owns permission checks; arena services validate all mutations again. */
 public final class CommandManager implements CommandExecutor, TabCompleter {
-    private static final List<String> PLAYER_COMMANDS = List.of("join", "leave", "list", "info", "classes", "stats", "history", "match", "top", "admin");
-    private static final List<String> ADMIN_COMMANDS = List.of("create", "delete", "setplayer", "addplayer", "setmob", "addmob", "clearspawns", "setexit", "setoutsider", "setpos1", "setpos2", "setup", "start", "stop", "forcewave", "reload", "status", "enable", "economy", "payouts", "reconcile", "npc", "website");
+    private static final List<String> PLAYER_COMMANDS = List.of("join", "leave", "list", "info", "classes", "stats", "history", "duels", "match", "top", "admin");
+    private static final List<String> ADMIN_COMMANDS = List.of("create", "delete", "mode", "mobset", "teamselection", "setteam", "addteam", "setplayer", "addplayer", "setmob", "addmob", "clearspawns", "setexit", "setoutsider", "setpos1", "setpos2", "setup", "start", "stop", "forcewave", "reload", "status", "enable", "economy", "payouts", "reconcile", "npc", "website");
     private final SimpleMobArena plugin;
     private final ArenaMenu menu;
 
@@ -48,7 +48,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
             if (args.length == 0) {
                 requirePermission(sender, "mobarena.use");
                 if (sender instanceof Player player) menu.open(player, 0);
-                else message(sender, "Commands: join, leave, list, info, classes, stats, history, match, top, admin.");
+                else message(sender, "Commands: join, leave, list, info, classes, stats, history, duels, match, top, admin.");
                 return true;
             }
             String sub = args[0].toLowerCase(Locale.ROOT);
@@ -68,6 +68,13 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                     Arena arena = requireArena(args[1]);
                     String choice = args.length > 2 ? args[2] : null;
                     if (choice == null) menu.openEquipment(player, arena.getId());
+                    else if (args.length > 3) {
+                        requireExactArgs(args,4,"/ma join <arena> <personal|class> <red|blue>");
+                        if (choice.equalsIgnoreCase("personal")) plugin.getArenaManager().join(player,arena.getId(),choice,args[3]);
+                        else menu.openClassPreview(player, arena.getId(), choice, args[3]);
+                    }
+                    else if (!choice.equalsIgnoreCase("personal")) menu.openClassPreview(player, arena.getId(), choice);
+                    else if (arena.isDuel() && arena.definition().chooseTeams) menu.openTeamSelection(player,arena.getId(),choice);
                     else plugin.getArenaManager().join(player, arena.getId(), choice);
                 }
                 // Leaving stays available even if permissions change during the match.
@@ -91,6 +98,11 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                 }
                 case "stats" -> stats(sender, args);
                 case "history" -> history(sender, args);
+                case "duels" -> {
+                    requirePermission(sender,"mobarena.history");
+                    requireExactArgs(args,args.length == 1 ? 1 : 2,"/ma duels [page]");
+                    menu.openDuels(requirePlayer(sender),args.length == 1 ? 1 : historyPage(args[1]));
+                }
                 case "match" -> match(sender, args);
                 case "top" -> {
                     requirePermission(sender, "mobarena.top");
@@ -103,7 +115,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                     });
                 }
                 case "admin" -> admin(sender, args);
-                default -> throw new IllegalArgumentException("Commands: /ma join, leave, list, info, classes, stats, history, match, top, admin.");
+                default -> throw new IllegalArgumentException("Commands: /ma join, leave, list, info, classes, stats, history, duels, match, top, admin.");
             }
         } catch (IllegalArgumentException | IllegalStateException ex) {
             error(sender, ex.getMessage());
@@ -189,7 +201,15 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         UUID sessionId = parseUuid(args[1]);
         if (sender instanceof Player player) { menu.openMatch(player, sessionId); return; }
         reply(sender, plugin.getEconomyService().match(sessionId), match -> {
-            if (match == null) { warning(sender, "No recorded match has that session ID."); return; }
+            if (match == null) {
+                reply(sender,plugin.getEconomyService().duelMatch(sessionId),duel -> {
+                    if (duel == null) { warning(sender,"No recorded match has that session ID."); return; }
+                    message(sender,duel.mode()+" | "+duel.arenaId()+" | winner: "+duel.winner()+" | "+duel.endReason());
+                    for (var participant : duel.participants()) message(sender,participant.playerName()+" | "+participant.team()
+                        +" | "+participant.kills()+" kills | "+participant.damage()+" damage | "+participant.participationSeconds()+"s played");
+                });
+                return;
+            }
             message(sender, "Match " + match.sessionId() + " | " + match.arenaId() + " | " + match.startedAt() + " to " + match.finishedAt());
             message(sender, "Completed waves: " + match.completedWaves() + " | Kills: " + match.totalKills() + " | Pot: " + match.prizePot().toPlainString() + " | Unallocated: " + match.unallocatedPot().toPlainString());
             message(sender, "Outcome: " + match.endReason() + (match.cancelled() ? " (cancelled)" : ""));
@@ -212,6 +232,14 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
             case "reload" -> {
                 plugin.getArenaManager().reloadArenas();
                 success(sender, "Configuration and arenas reloaded.");
+                List<String> equipmentErrors = plugin.getEquipmentService().configurationErrors();
+                if (equipmentErrors.isEmpty()) success(sender, "Equipment settings: no errors.");
+                else {
+                    warning(sender, "Equipment settings: " + equipmentErrors.size() + (equipmentErrors.size() == 1 ? " error." : " errors."));
+                    equipmentErrors.stream().limit(5).forEach(error -> warning(sender, error));
+                    if (equipmentErrors.size() > 5) message(sender, "See the console for the remaining equipment errors.");
+                    warning(sender, "Affected equipment choices are unavailable. Fix the settings, then run /ma admin reload.");
+                }
                 message(sender, "Check the console and /ma admin economy for validation errors.");
                 message(sender, "Website export and storage settings take effect after a server restart.");
             }
@@ -251,6 +279,32 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                         return;
                     }
                     case "delete" -> plugin.getArenaManager().delete(id);
+                    case "mode", "mobset", "teamselection" -> {
+                        requireExactArgs(args,4,"/ma admin "+action+" <arena> <value>");
+                        if (action.equals("mode")) plugin.getArenaManager().setMode(id,args[3]);
+                        else if (action.equals("mobset")) plugin.getArenaManager().setMobSet(id,args[3]);
+                        else plugin.getArenaManager().setTeamSelection(id,args[3]);
+                        success(sender,action+" saved for "+id+". Check /ma admin setup "+id+".");
+                        if (action.equals("mode")) message(sender,"The arena is disabled until you check its spawns and enable it again.");
+                        if (action.equals("mobset")) {
+                            Arena arena = requireArena(id);
+                            if (arena.isDuel()) message(sender,"Mob sets take effect when this arena uses MOB_ARENA mode.");
+                            else if (arena.definition().config.contains("waves.mobs")) warning(sender,
+                                "This arena still uses its own waves.mobs pool. Remove waves.mobs from arenas/"+arena.getId()+".yml and reload to use the saved mob-set selection.");
+                            else message(sender,"Mob pool: "+mobPoolDescription(arena.definition())+".");
+                        }
+                        return;
+                    }
+                    case "setteam", "addteam" -> {
+                        requireExactArgs(args,4,"/ma admin "+action+" <arena> <red|blue>");
+                        String team = args[3].toLowerCase(Locale.ROOT);
+                        if (!List.of("red","blue").contains(team)) throw new IllegalArgumentException("Choose red or blue.");
+                        Location location = requirePlayer(sender).getLocation();
+                        if (action.equals("setteam")) plugin.getArenaManager().setLocation(id,"duel."+team+"-spawns",location);
+                        else plugin.getArenaManager().addSpawn(id,"duel."+team+"-spawns",location);
+                        success(sender,"Saved "+team+" spawn for "+id+". Check /ma admin setup "+id+".");
+                        return;
+                    }
                     case "setplayer", "setmob", "addplayer", "addmob", "setexit", "setpos1", "setpos2" -> {
                         requireExactArgs(args, 3, "/ma admin " + action + " <arena>");
                         String key = switch (action) {
@@ -284,12 +338,13 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                         return;
                     }
                     case "clearspawns" -> {
-                        requireExactArgs(args, 4, "/ma admin clearspawns <arena> <player|mob|all>");
+                        requireExactArgs(args, 4, "/ma admin clearspawns <arena> <player|mob|red|blue|all>");
                         String type = args[3].toLowerCase(Locale.ROOT);
-                        if (!List.of("player", "mob", "all").contains(type)) throw new IllegalArgumentException("Choose player, mob or all for clearspawns.");
+                        if (!List.of("player", "mob", "red", "blue", "all").contains(type)) throw new IllegalArgumentException("Choose player, mob, red, blue or all for clearspawns.");
+                        Arena arena = requireArena(id);
                         plugin.getArenaManager().clearSpawns(id, type);
                         success(sender, "Cleared " + type + " spawns for " + id + ".");
-                        warning(sender, "Set the required spawns with /ma admin setplayer " + id + " and /ma admin setmob " + id + ".");
+                        clearedSpawnHelp(sender,arena,type);
                         return;
                     }
                     case "start" -> requireArena(id).startArena();
@@ -332,6 +387,8 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         String id = arena.getId();
         message(sender, "Setup: " + id + " | " + (definition.enabled ? "enabled" : "disabled")
             + " | World: " + definition.config.getString("world", "world"));
+        message(sender,"Mode: "+definition.mode.label()+(arena.isDuel() ? " | Team size: "+definition.teamSize+" | Selection: "+(definition.chooseTeams ? "CHOOSE" : "AUTO")
+            : " | Mob pool: "+mobPoolDescription(definition)));
         message(sender, "Corner 1: " + configuredLocation(definition, "pos1") + " | Corner 2: " + configuredLocation(definition, "pos2"));
         if (definition.pos1 != null && definition.pos2 != null) {
             Location first = definition.pos1, second = definition.pos2;
@@ -340,7 +397,10 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                 + " | Z " + Math.min(first.getBlockZ(), second.getBlockZ()) + ".." + Math.max(first.getBlockZ(), second.getBlockZ()));
         }
         showSpawns(sender, definition, "player-spawns", "Player");
-        showSpawns(sender, definition, "mob-spawns", "Mob");
+        if (arena.isDuel()) {
+            showSpawns(sender,definition,"duel.red-spawns","Red team");
+            showSpawns(sender,definition,"duel.blue-spawns","Blue team");
+        } else showSpawns(sender, definition, "mob-spawns", "Mob");
         message(sender, "Exit: " + configuredLocation(definition, "exit"));
         boolean separateExit = !definition.config.getString("outsider-exit", "").isBlank();
         message(sender, "Outsider exit: " + (separateExit ? configuredLocation(definition, "outsider-exit") : "uses exit above"));
@@ -357,6 +417,24 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         }
         repairs.forEach(repair -> message(sender, repair));
         warning(sender, "Check again with /ma admin setup " + id + ". Enable only when it says Ready.");
+    }
+
+    private static String mobPoolDescription(ArenaDefinition definition) {
+        String selected = definition.mobSet.isEmpty() ? "global waves.mobs" : "named set " + definition.mobSet;
+        return definition.config.contains("waves.mobs") ? "arena waves.mobs override (saved selection: " + selected + ")" : selected;
+    }
+
+    private static void clearedSpawnHelp(CommandSender sender, Arena arena, String type) {
+        String id = arena.getId();
+        if (type.equals("red") || type.equals("blue")) {
+            warning(sender,"Set a new "+type+" team spawn with /ma admin setteam "+id+" "+type+".");
+        } else if (arena.isDuel()) {
+            if (type.equals("all")) warning(sender,"Set both team spawns with /ma admin setteam "+id+" red and /ma admin setteam "+id+" blue. Separate lobby spawns are optional.");
+            else if (type.equals("player")) message(sender,"The lobby now uses the team spawns. Use /ma admin setplayer "+id+" for separate waiting positions.");
+            else message(sender,"Duels do not require mob spawns.");
+        } else if (type.equals("all")) {
+            warning(sender,"Set the required spawns with /ma admin setplayer "+id+" and /ma admin setmob "+id+".");
+        } else warning(sender,"Set the required "+type+" spawn with /ma admin set"+type+" "+id+".");
     }
 
     private static void showSpawns(CommandSender sender, ArenaDefinition definition, String key, String label) {
@@ -402,6 +480,11 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
 
     private void info(CommandSender sender, Arena arena) {
         message(sender, "Arena: " + arena.getName() + " (" + arena.getId() + ") | " + arena.getArenaState());
+        if (arena.isDuel()) {
+            message(sender,arena.definition().mode.label()+" | Red: "+arena.teamCount(cloud.mineplay.mobarena.duels.DuelTeams.Team.RED)
+                +" | Blue: "+arena.teamCount(cloud.mineplay.mobarena.duels.DuelTeams.Team.BLUE)+" | No cash rewards");
+            return;
+        }
         message(sender, "Wave: " + arena.getCurrentWave() + " | Completed: " + arena.getCompletedWaves() + " | Players: " + arena.getPlayers().size() + "/" + arena.getMaxPlayers() + " | Pot: $" + arena.getPrizePot().toPlainString());
         if (sender instanceof Player player) message(sender, "Your kills: " + arena.getKills(player.getUniqueId()) + " | Estimated reward: $" + estimatedShare(arena, player.getUniqueId()).toPlainString() + " (your final reward may be lower)");
     }
@@ -519,12 +602,25 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                 ? matches(List.of("status","backfill","retry"),args[2]) : List.of();
             if (args.length == 4 && args[1].equalsIgnoreCase("enable")) return matches(List.of("true", "false"), args[3]);
             if (args.length == 4 && args[1].equalsIgnoreCase("reconcile")) return matches(List.of("CONFIRM", "VOID"), args[3]);
-            if (args.length == 4 && args[1].equalsIgnoreCase("clearspawns")) return matches(List.of("player", "mob", "all"), args[3]);
+            if (args.length == 4 && args[1].equalsIgnoreCase("clearspawns")) return matches(List.of("player", "mob", "red", "blue", "all"), args[3]);
             if (args.length == 4 && args[1].equalsIgnoreCase("setoutsider")) return matches(List.of("exit"), args[3]);
+            if (args.length == 4 && args[1].equalsIgnoreCase("mode")) return matches(List.of("MOB_ARENA","DUEL","TEAM_DUEL"),args[3]);
+            if (args.length == 4 && args[1].equalsIgnoreCase("teamselection")) return matches(List.of("AUTO","CHOOSE"),args[3]);
+            if (args.length == 4 && List.of("setteam","addteam").contains(args[1].toLowerCase(Locale.ROOT))) return matches(List.of("red","blue"),args[3]);
+            if (args.length == 4 && args[1].equalsIgnoreCase("mobset")) {
+                var sets = plugin.getConfig().getConfigurationSection("mob-sets");
+                var names = new java.util.ArrayList<String>(); names.add("default");
+                if (sets != null) names.addAll(sets.getKeys(false));
+                return matches(names,args[3]);
+            }
             if (args.length == 3 && !List.of("create", "payouts", "reconcile", "economy", "reload").contains(args[1].toLowerCase(Locale.ROOT))) return arenaMatches(args[2]);
         }
         if (args.length == 2 && List.of("join", "info", "start", "stop", "forcewave", "setspawn").contains(args[0].toLowerCase(Locale.ROOT))) return arenaMatches(args[1]);
         if (args.length == 3 && args[0].equalsIgnoreCase("join")) return matches(plugin.getEquipmentService().availableChoices(), args[2]);
+        if (args.length == 4 && args[0].equalsIgnoreCase("join")) {
+            Arena arena = plugin.getArenaManager().getArena(args[1]);
+            return arena != null && arena.isDuel() && arena.definition().chooseTeams ? matches(List.of("red","blue"),args[3]) : List.of();
+        }
         return List.of();
     }
     private List<String> arenaMatches(String prefix) { return matches(plugin.getArenaManager().getArenas().stream().map(Arena::getId).toList(), prefix); }

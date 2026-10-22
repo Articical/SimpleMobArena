@@ -1,0 +1,65 @@
+# Hard, 25 waves. Configure with /ma admin setup raiders-example before enabling.
+# Use wide clear spawn pads for ravagers/golems; the pool does not build the arena.
+name: Raider Stronghold
+enabled: false
+mode: MOB_ARENA
+world: world
+pos1: ''
+pos2: ''
+player-spawns: []
+mob-spawns: []
+exit: ''
+outsider-exit: ''
+worldguard-region: ''
+min-players: 1
+max-players: 4
+countdown-seconds: 15
+difficulty-multiplier: 1.15
+max-active-mobs: 36
+max-waves: 25
+waves:
+  base-mobs: 4
+  mobs-per-wave-per-player: 1
+  max-mobs-per-wave: 80
+  spawn-interval-ticks: 12
+  spawn-batch-size: 2
+  intermission-seconds: 10
+  maximum-wave-seconds: 900
+  heal-between-waves: true
+  meme-rounds:
+    enabled: false
+  health-increase-percent: 10
+  health-increase-every-waves: 5
+  player-health-scaling:
+    enabled: true
+    additional-player-multiplier: 0.10
+    maximum-multiplier: 1.30
+  # Relative weights, not percentages; rare heavy mobs are not guaranteed bosses.
+  mobs:
+    VINDICATOR:
+      unlock-wave: 1
+      weight: 24
+      health-multiplier: 0.85
+      equipment:
+        hand: [{material: STONE_AXE, chance: 0.85}, {material: IRON_AXE, chance: 0.15}]
+        off_hand: []
+        head: []
+        chest: []
+        legs: []
+        feet: []
+    PILLAGER:
+      unlock-wave: 3
+      weight: 16
+      health-multiplier: 0.9
+      equipment:
+        hand: [{material: CROSSBOW, chance: 1.0}]
+        off_hand: []
+        head: []
+        chest: []
+        legs: []
+        feet: []
+    CREEPER: {unlock-wave: 4, weight: 4, health-multiplier: 1.0}
+    WITCH: {unlock-wave: 6, weight: 4, health-multiplier: 0.9}
+    EVOKER: {unlock-wave: 10, weight: 2, health-multiplier: 0.9}
+    IRON_GOLEM: {unlock-wave: 14, weight: 1, health-multiplier: 0.55}
+    RAVAGER: {unlock-wave: 16, weight: 1, health-multiplier: 0.60}

@@ -5,6 +5,7 @@ import cloud.mineplay.mobarena.arenas.Arena;
 import cloud.mineplay.mobarena.arenas.ArenaManager;
 import cloud.mineplay.mobarena.config.ArenaDefinition;
 import cloud.mineplay.mobarena.economy.EconomyService;
+import cloud.mineplay.mobarena.equipment.EquipmentService;
 import cloud.mineplay.mobarena.gui.ArenaMenu;
 import cloud.mineplay.mobarena.integration.CitizensArenaNpc;
 import cloud.mineplay.mobarena.messages.ArenaMessages;
@@ -68,6 +69,7 @@ class CommandManagerTest {
         commands.onCommand(player, null, "ma", new String[]{"classes"});
         commands.onCommand(player, null, "ma", new String[]{"stats"});
         commands.onCommand(player, null, "ma", new String[]{"history", "3"});
+        commands.onCommand(player, null, "ma", new String[]{"duels", "2"});
         commands.onCommand(player, null, "ma", new String[]{"match", sessionId.toString()});
         commands.onCommand(player, null, "ma", new String[]{"top"});
 
@@ -76,6 +78,7 @@ class CommandManagerTest {
         verify(menu).openClasses(player);
         verify(menu).openStats(player, playerId, ".BedrockPlayer");
         verify(menu).openHistory(player, playerId, ".BedrockPlayer", 3);
+        verify(menu).openDuels(player,2);
         verify(menu).openMatch(player, sessionId);
         verify(menu).openLeaderboard(player);
         verifyNoMoreInteractions(menu);
@@ -87,13 +90,100 @@ class CommandManagerTest {
     @Test void menuCommandsStillRequireTheirExistingPermissions() {
         Player player = mock(Player.class);
         for (String[] args : List.of(new String[]{}, new String[]{"list"}, new String[]{"info", "castle"},
-                new String[]{"classes"}, new String[]{"stats"}, new String[]{"history"},
+                new String[]{"classes"}, new String[]{"stats"}, new String[]{"history"}, new String[]{"duels"},
                 new String[]{"match", UUID.randomUUID().toString()}, new String[]{"top"}, new String[]{"join", "castle"})) {
             commands.onCommand(player, null, "ma", args);
         }
         verifyNoInteractions(menu);
         verify(plugin, never()).getEconomyService();
         verify(plugin, never()).getArenaManager();
+    }
+
+    @Test void reloadReportsEquipmentErrorsAndConfirmsWhenTheyAreFixed() {
+        ArenaManager manager = mock(ArenaManager.class);
+        EquipmentService equipment = mock(EquipmentService.class);
+        when(plugin.getArenaManager()).thenReturn(manager);
+        when(plugin.getEquipmentService()).thenReturn(equipment);
+        when(sender.hasPermission("mobarena.admin.reload")).thenReturn(true);
+        String problem = "classes.scout.items.5: unknown potion effect";
+        when(equipment.configurationErrors()).thenReturn(List.of(problem));
+
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "reload"});
+
+        verify(manager).reloadArenas();
+        verify(sender).sendMessage(ArenaMessages.warning("Equipment settings: 1 error."));
+        verify(sender).sendMessage(ArenaMessages.warning(problem));
+        verify(sender).sendMessage(ArenaMessages.warning("Affected equipment choices are unavailable. Fix the settings, then run /ma admin reload."));
+        verify(sender, never()).sendMessage(ArenaMessages.success("Equipment settings: no errors."));
+
+        clearInvocations(sender);
+        when(equipment.configurationErrors()).thenReturn(List.of());
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "reload"});
+
+        verify(manager, times(2)).reloadArenas();
+        verify(sender).sendMessage(ArenaMessages.success("Equipment settings: no errors."));
+        verify(sender, never()).sendMessage(ArenaMessages.warning(problem));
+        verify(sender, never()).sendMessage(ArenaMessages.warning("Affected equipment choices are unavailable. Fix the settings, then run /ma admin reload."));
+    }
+
+    @Test void reloadBoundsEquipmentDiagnosticsAndKeepsTheTotalErrorCount() {
+        ArenaManager manager = mock(ArenaManager.class);
+        EquipmentService equipment = mock(EquipmentService.class);
+        when(plugin.getArenaManager()).thenReturn(manager);
+        when(plugin.getEquipmentService()).thenReturn(equipment);
+        when(sender.hasPermission("mobarena.admin.reload")).thenReturn(true);
+        List<String> errors = java.util.stream.IntStream.rangeClosed(1, 7).mapToObj(i -> "Invalid class " + i).toList();
+        when(equipment.configurationErrors()).thenReturn(errors);
+
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "reload"});
+
+        verify(sender).sendMessage(ArenaMessages.warning("Equipment settings: 7 errors."));
+        for (int i = 0; i < 5; i++) verify(sender).sendMessage(ArenaMessages.warning(errors.get(i)));
+        for (int i = 5; i < errors.size(); i++) verify(sender, never()).sendMessage(ArenaMessages.warning(errors.get(i)));
+        verify(sender).sendMessage(ArenaMessages.info("See the console for the remaining equipment errors."));
+    }
+
+    @Test void reloadPermissionIsCheckedBeforeReadingOrChangingEquipment() {
+        commands.onCommand(sender, null, "ma", new String[]{"admin", "reload"});
+        verify(plugin, never()).getArenaManager();
+        verify(plugin, never()).getEquipmentService();
+        verify(sender).sendMessage(ArenaMessages.error("Missing permission: mobarena.admin.reload"));
+    }
+
+    @Test void duelSetupRoutesOnlyWithSpecificPermissionsAndValidTeam() {
+        ArenaManager manager = mock(ArenaManager.class);
+        when(plugin.getArenaManager()).thenReturn(manager);
+        commandArena(manager,"castle",new YamlConfiguration());
+        Player admin = mock(Player.class);
+        when(admin.hasPermission(anyString())).thenReturn(true);
+        Location location = new Location(mock(World.class),2,64,2);
+        when(admin.getLocation()).thenReturn(location);
+        commands.onCommand(admin,null,"ma",new String[]{"admin","mode","castle","TEAM_DUEL"});
+        commands.onCommand(admin,null,"ma",new String[]{"admin","mobset","castle","undead"});
+        commands.onCommand(admin,null,"ma",new String[]{"admin","teamselection","castle","CHOOSE"});
+        commands.onCommand(admin,null,"ma",new String[]{"admin","setteam","castle","red"});
+        commands.onCommand(admin,null,"ma",new String[]{"admin","addteam","castle","blue"});
+        verify(manager).setMode("castle","TEAM_DUEL");
+        verify(manager).setMobSet("castle","undead");
+        verify(manager).setTeamSelection("castle","CHOOSE");
+        verify(manager).setLocation("castle","duel.red-spawns",location);
+        verify(manager).addSpawn("castle","duel.blue-spawns",location);
+        clearInvocations(manager);
+        commands.onCommand(admin,null,"ma",new String[]{"admin","setteam","castle","purple"});
+        when(admin.hasPermission("mobarena.admin.mode")).thenReturn(false);
+        commands.onCommand(admin,null,"ma",new String[]{"admin","mode","castle","DUEL"});
+        verifyNoInteractions(manager);
+    }
+
+    @Test void chosenTeamIsPreservedByClassPreview() {
+        ArenaManager manager = mock(ArenaManager.class); Arena arena = mock(Arena.class);
+        Player player = mock(Player.class);
+        when(player.hasPermission("mobarena.join")).thenReturn(true);
+        when(plugin.getArenaManager()).thenReturn(manager); when(manager.getArena("castle")).thenReturn(arena);
+        when(arena.getId()).thenReturn("castle");
+        commands.onCommand(player,null,"ma",new String[]{"join","castle","knight","blue"});
+        verify(menu).openClassPreview(player,"castle","knight","blue");
+        verify(manager,never()).join(any(),any(),any(),any());
     }
 
     @Test void cachedPlayerReportsNeedOthersPermissionBeforeOpeningMenus() {
@@ -164,7 +254,7 @@ class CommandManagerTest {
         verify(plugin, never()).getEconomyService();
     }
 
-    @Test void joinWithoutAnEquipmentChoiceOpensSelectionAndExplicitChoiceStillJoins() {
+    @Test void joinWithoutAnEquipmentChoiceOpensSelectionAndExplicitClassOpensPreview() {
         Player player = mock(Player.class);
         when(player.hasPermission("mobarena.join")).thenReturn(true);
         ArenaManager manager = mock(ArenaManager.class);
@@ -180,7 +270,8 @@ class CommandManagerTest {
         commands.onCommand(player, null, "ma", new String[]{"join", "castle", "personal"});
         commands.onCommand(player, null, "ma", new String[]{"join", "castle", "knight"});
         verify(manager).join(player, "castle", "personal");
-        verify(manager).join(player, "castle", "knight");
+        verify(menu).openClassPreview(player, "castle", "knight");
+        verify(manager, never()).join(player, "castle", "knight");
         verifyNoMoreInteractions(menu);
     }
 
@@ -336,8 +427,52 @@ class CommandManagerTest {
         commands.onCommand(sender, null, "ma", new String[]{"admin", "clearspawns", "spawn", "wrong"});
         commands.onCommand(sender, null, "ma", new String[]{"admin", "clearspawns", "spawn", "all", "extra"});
         verifyNoInteractions(manager);
+        commandArena(manager,"spawn",new YamlConfiguration());
         commands.onCommand(sender, null, "ma", new String[]{"admin", "clearspawns", "spawn", "ALL"});
         verify(manager).clearSpawns("spawn", "all");
+    }
+
+    @Test void clearTeamSpawnsUsesTeamRepairCommandsAndClearingLobbyExplainsFallback() {
+        ArenaManager manager = mock(ArenaManager.class);
+        when(plugin.getArenaManager()).thenReturn(manager);
+        when(sender.hasPermission("mobarena.admin.clearspawns")).thenReturn(true);
+        YamlConfiguration config = new YamlConfiguration(); config.set("mode","TEAM_DUEL");
+        commandArena(manager,"duel",config);
+
+        commands.onCommand(sender,null,"ma",new String[]{"admin","clearspawns","duel","red"});
+        commands.onCommand(sender,null,"ma",new String[]{"admin","clearspawns","duel","blue"});
+        commands.onCommand(sender,null,"ma",new String[]{"admin","clearspawns","duel","player"});
+        commands.onCommand(sender,null,"ma",new String[]{"admin","clearspawns","duel","all"});
+
+        verify(manager).clearSpawns("duel","red"); verify(manager).clearSpawns("duel","blue");
+        verify(sender).sendMessage(ArenaMessages.warning("Set a new red team spawn with /ma admin setteam duel red."));
+        verify(sender).sendMessage(ArenaMessages.warning("Set a new blue team spawn with /ma admin setteam duel blue."));
+        verify(sender).sendMessage(ArenaMessages.info("The lobby now uses the team spawns. Use /ma admin setplayer duel for separate waiting positions."));
+        ArgumentCaptor<Component> messages = ArgumentCaptor.forClass(Component.class);
+        verify(sender,atLeastOnce()).sendMessage(messages.capture());
+        List<String> lines = messages.getAllValues().stream().map(PlainTextComponentSerializer.plainText()::serialize).toList();
+        assertTrue(lines.stream().anyMatch(line -> line.contains("setteam duel red") && line.contains("setteam duel blue")));
+        assertTrue(lines.stream().noneMatch(line -> line.contains("setmob")));
+    }
+
+    @Test void mobSetCommandWarnsAboutPreservedOverridesAndSetupNamesTheEffectivePool() {
+        ArenaManager manager = mock(ArenaManager.class);
+        when(plugin.getArenaManager()).thenReturn(manager);
+        when(sender.hasPermission(anyString())).thenReturn(true);
+        YamlConfiguration config = new YamlConfiguration();
+        config.set("mob-set","undead"); config.set("waves.mobs.SPIDER.unlock-wave",1);
+        commandArena(manager,"spawn",config);
+
+        commands.onCommand(sender,null,"ma",new String[]{"admin","mobset","spawn","undead"});
+        commands.onCommand(sender,null,"ma",new String[]{"admin","setup","spawn"});
+
+        verify(manager).setMobSet("spawn","undead");
+        verify(sender).sendMessage(ArenaMessages.warning("This arena still uses its own waves.mobs pool. Remove waves.mobs from arenas/spawn.yml and reload to use the saved mob-set selection."));
+        ArgumentCaptor<Component> messages = ArgumentCaptor.forClass(Component.class);
+        verify(sender,atLeastOnce()).sendMessage(messages.capture());
+        assertTrue(messages.getAllValues().stream().map(PlainTextComponentSerializer.plainText()::serialize)
+                .anyMatch(line -> line.contains("Mob pool: arena waves.mobs override (saved selection: named set undead)")));
+        assertTrue(config.contains("waves.mobs.SPIDER"),"Reporting must preserve the arena override.");
     }
 
     @Test void consoleCanResetOutsidersToExitWithoutAPlayerLocation() {
@@ -421,7 +556,7 @@ class CommandManagerTest {
         assertTrue(commands.onTabComplete(sender, null, "ma", new String[]{"admin", "clearspawns", "spawn", ""}).isEmpty());
         when(sender.hasPermission("mobarena.admin.clearspawns")).thenReturn(true);
         when(sender.hasPermission("mobarena.admin.setoutsider")).thenReturn(true);
-        assertEquals(List.of("all", "mob", "player"), commands.onTabComplete(sender, null, "ma", new String[]{"admin", "clearspawns", "spawn", ""}));
+        assertEquals(List.of("all", "blue", "mob", "player", "red"), commands.onTabComplete(sender, null, "ma", new String[]{"admin", "clearspawns", "spawn", ""}));
         assertEquals(List.of("exit"), commands.onTabComplete(sender, null, "ma", new String[]{"admin", "setoutsider", "spawn", "e"}));
     }
 
@@ -531,5 +666,18 @@ class CommandManagerTest {
         assertTrue(commands.onTabComplete(sender, null, "ma", new String[]{"admin", "npc", "bind", ""}).isEmpty());
         verify(plugin, never()).getCitizensArenaNpc();
         verify(plugin, never()).getArenaManager();
+    }
+
+    private Arena commandArena(ArenaManager manager, String id, YamlConfiguration config) {
+        YamlConfiguration defaults = new YamlConfiguration();
+        defaults.set("waves.mobs.ZOMBIE.unlock-wave",1);
+        defaults.set("mob-sets.undead.mobs.ZOMBIE.unlock-wave",1);
+        ArenaDefinition definition = new ArenaDefinition(id,config,defaults);
+        Arena arena = mock(Arena.class);
+        when(arena.getId()).thenReturn(id);
+        when(arena.definition()).thenReturn(definition);
+        when(arena.isDuel()).thenReturn(definition.mode.isDuel());
+        when(manager.getArena(id)).thenReturn(arena);
+        return arena;
     }
 }

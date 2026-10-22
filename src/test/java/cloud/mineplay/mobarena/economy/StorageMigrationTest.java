@@ -3,6 +3,7 @@ package cloud.mineplay.mobarena.economy;
 import static org.junit.jupiter.api.Assertions.*;
 import cloud.mineplay.mobarena.equipment.SnapshotStore;
 import cloud.mineplay.mobarena.storage.DatabaseSettings;
+import cloud.mineplay.mobarena.storage.DuelOutbox;
 import cloud.mineplay.mobarena.storage.SettlementStore;
 import cloud.mineplay.mobarena.storage.StorageMigration;
 import java.math.BigDecimal;
@@ -56,6 +57,50 @@ class StorageMigrationTest {
         assertThrows(SQLException.class, () -> StorageMigration.migrate(source, target, true));
         try (var store = new SettlementStore(target)) { assertEquals(1, store.stats(PLAYER).sessions()); }
         assertThrows(IllegalArgumentException.class, () -> StorageMigration.migrate(source, target, false));
+    }
+
+    @Test void copiesDuelWinnersAndBothTeamRostersWithVerifiedRoundtrip() throws Exception {
+        var source = DatabaseSettings.sqlite(directory.resolve("source"));
+        var target = DatabaseSettings.sqlite(directory.resolve("target"));
+        var returned = DatabaseSettings.sqlite(directory.resolve("returned"));
+        populate(source);
+        var duel = DuelStoreTest.result(UUID.randomUUID(), DuelStoreTest.START.plusSeconds(120));
+        try (var store = new SettlementStore(source)) { store.recordDuel(duel); }
+        var first = StorageMigration.migrate(source, target, true);
+        assertEquals(1, first.rows().get("duels"));
+        assertEquals(2, first.rows().get("duel_participants"));
+        assertEquals(64, first.sha256().get("duel_participants").length());
+        var second = StorageMigration.migrate(target, returned, true);
+        assertEquals(first.rows(), second.rows());
+        assertEquals(first.sha256(), second.sha256());
+        try (var original = new SettlementStore(source); var copied = new SettlementStore(returned)) {
+            assertEquals(duel, original.duelMatch(duel.sessionId()));
+            assertEquals(duel, copied.duelMatch(duel.sessionId()));
+            assertEquals(0, copied.stats(DuelStoreTest.RED).kills());
+        }
+    }
+
+    @Test void refusesUndrainedDuelOutboxWithoutLosingItsRecord() throws Exception {
+        var source = DatabaseSettings.sqlite(directory.resolve("source"));
+        var target = DatabaseSettings.sqlite(directory.resolve("target"));
+        populate(source);
+        var outbox = new DuelOutbox(source.directory().resolve("duel-outbox"));
+        var duel = DuelStoreTest.result(UUID.randomUUID(), DuelStoreTest.START.plusSeconds(120));
+        outbox.save(duel);
+        var failure = assertThrows(IllegalArgumentException.class, () -> StorageMigration.migrate(source, target, true));
+        assertTrue(failure.getMessage().contains("Undrained duel outbox"));
+        assertEquals(List.of(duel), outbox.entries());
+    }
+
+    @Test void duelOnlyTargetCountsAsPopulatedAndCannotBeOverwritten() throws Exception {
+        var source = DatabaseSettings.sqlite(directory.resolve("source"));
+        var target = DatabaseSettings.sqlite(directory.resolve("target"));
+        populate(source);
+        var duel = DuelStoreTest.result(UUID.randomUUID(), DuelStoreTest.START.plusSeconds(120));
+        try (var store = new SettlementStore(target)) { store.recordDuel(duel); }
+        var failure = assertThrows(SQLException.class, () -> StorageMigration.migrate(source, target, true));
+        assertTrue(failure.getMessage().contains("duels"));
+        try (var store = new SettlementStore(target)) { assertEquals(duel, store.duelMatch(duel.sessionId())); }
     }
 
     @Test void exportIdentityRevisionsExactBytesAndDeliveryMetadataSurviveRoundtrip() throws Exception {

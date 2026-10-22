@@ -2,7 +2,7 @@ name: SimpleMobArena
 version: '${version}'
 main: cloud.mineplay.mobarena.SimpleMobArena
 api-version: '26.3'
-description: Fight waves of mobs, unlock classes and earn rewards with your team.
+description: Fight mob waves, unlock classes, or compete in duels and team duels.
 authors: [Mineplay]
 website: https://github.com/Articical/SimpleMobArena
 softdepend: [Vault, Essentials, WorldGuard, PlaceholderAPI, Citizens]
@@ -10,8 +10,11 @@ commands:
   mobarena:
     description: Open the arena menu, view results or join a match.
     aliases: [ma]
-    usage: /<command> [join|leave|list|info|classes|stats|history|match|top|admin]
+    usage: /<command> [join|leave|list|info|classes|stats|history|duels|match|top|admin]
 permissions:
+  mobarena.admin.bypass:
+    description: Enter and edit occupied arenas while not playing or recovering equipment. Other protection plugins still apply.
+    default: false
   mobarena.use:
     description: Open the arena menu, class list and arena details.
     default: true
@@ -38,6 +41,11 @@ permissions:
     default: op
     children:
       mobarena.admin.create: true
+      mobarena.admin.mode: true
+      mobarena.admin.mobset: true
+      mobarena.admin.teamselection: true
+      mobarena.admin.setteam: true
+      mobarena.admin.addteam: true
       mobarena.admin.delete: true
       mobarena.admin.setplayer: true
       mobarena.admin.addplayer: true
@@ -61,6 +69,16 @@ permissions:
       mobarena.admin.npc: true
       mobarena.admin.website: true
   mobarena.admin.create:
+    default: op
+  mobarena.admin.mode:
+    default: op
+  mobarena.admin.mobset:
+    default: op
+  mobarena.admin.teamselection:
+    default: op
+  mobarena.admin.setteam:
+    default: op
+  mobarena.admin.addteam:
     default: op
   mobarena.admin.delete:
     default: op

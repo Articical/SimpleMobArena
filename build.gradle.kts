@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "cloud.mineplay"
-version = "1.0.7"
+version = "1.0.10"
 
 val mockitoAgent = configurations.create("mockitoAgent")
 

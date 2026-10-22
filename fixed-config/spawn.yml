@@ -1,0 +1,246 @@
+# Spawn Arena - 1 to 4 players, 30 waves, all 28 supported mob types.
+# Requires SimpleMobArena 1.0.10 or later. Your positions are unchanged.
+# Copy to plugins/SimpleMobArena/arenas/spawn.yml, then /ma admin reload.
+# Check /ma admin setup spawn after reloading; terrain and WorldGuard still apply.
+name: Spawn Arena
+enabled: true
+mode: MOB_ARENA
+world: world
+pos1: world,231.51012187242995,100.0,-458.3027600603243,179.24207,10.349913
+pos2: world,264.64699775505164,109.0,-492.60888607890513,-0.0060424805,-7.9500055
+player-spawns:
+  - world,249.55506082411765,102.0,-460.74666078202176,-179.55597,-1.6501552
+  - world,248.58885105851314,102.0,-460.6543704423471,-179.55592,1.9497892
+  - world,247.51188402587664,102.0,-460.6458412375194,179.54395,0.89970106
+  - world,246.5095577594062,102.0,-460.48574837134476,179.84372,-2.1002946
+mob-spawns:
+  - world,234.76448779313063,104.0,-462.9285483517688,-134.85617,5.099676
+  - world,235.45284068750198,102.0,-474.4586064872781,-89.85568,-1.9503525
+  - world,235.48622356633763,102.0,-478.1657212954131,-89.405495,-1.3503505
+  - world,234.5602014655103,104.0,-489.4339395537943,-41.255028,2.2496688
+  - world,246.94660721219103,102.0,-491.6077012296489,-0.7549945,-3.4503248
+  - world,249.53654280910666,102.0,-491.6474554092403,-0.7549945,-3.4503248
+  - world,261.1959885134768,103.0,-489.52518877954407,38.84496,6.149677
+  - world,261.20541715349594,102.0,-475.46828884644793,89.24496,-2.8503184
+  - world,260.53593826566305,103.0,-463.9005333060856,126.145035,2.5496652
+exit: world,247.89262434499298,102.0,-446.2987178840691,179.54492,-0.3003199
+outsider-exit: world,247.91129765399677,113.0,-453.90064017849227,179.54509,9.749675
+min-players: 1
+max-players: 4
+countdown-seconds: 15
+difficulty-multiplier: 1.0
+# Smaller concurrent crowd for this roughly 34 x 35 block arena; later mobs queue.
+max-active-mobs: 40
+max-waves: 30
+worldguard-region: ''
+
+# This local pool is complete; it does not need a named mob set in config.yml.
+# Kill requirements, prize funding, payment caps and class kits remain in config.yml/classes.yml.
+waves:
+  # Count = 5 + wave x starting players, then capped. Difficulty scales health.
+  # Solo: 6 on wave 1, 15 on wave 10, 35 on wave 30.
+  # Four players: 9 on wave 1, 45 on wave 10, capped at 100 from wave 24.
+  base-mobs: 5
+  mobs-per-wave-per-player: 1
+  max-mobs-per-wave: 100
+  spawn-interval-ticks: 10
+  spawn-batch-size: 2
+  intermission-seconds: 10
+  maximum-wave-seconds: 900
+  heal-between-waves: true
+  # 12% chance on eligible waves; the selected theme lasts for the whole wave.
+  # Three ordinary waves must pass before another. Missing/locked types cannot appear.
+  meme-rounds:
+    enabled: true
+    chance: 0.12
+    minimum-wave: 4
+    cooldown-waves: 3
+    types:
+      goats: {name: 'Goat Stampede', weight: 1, mobs: [GOAT]}
+      llamas: {name: 'Llama Drama', weight: 1, mobs: [LLAMA]}
+      bees: {name: 'Bee Swarm', weight: 1, mobs: [BEE]}
+  # +10% base health at waves 6, 11, 16, 21 and 26 (additive).
+  health-increase-percent: 10
+  health-increase-every-waves: 5
+  player-health-scaling:
+    enabled: true
+    additional-player-multiplier: 0.10
+    maximum-multiplier: 1.30
+  # Both count and health use the original player count for the whole match.
+  # Each spawn rolls among unlocked mobs: weight is relative, not a percentage.
+  # Later waves retain earlier mobs. Rare heavy enemies are not guaranteed bosses.
+  # Ranged mobs start on wave 3 at the earliest. Creepers cannot break blocks;
+  # endermen cannot pick up or place blocks. Drowned remain excluded.
+  # Give ravagers/golems broad clear spawn pads and endermen three blocks of height.
+  # The existing Y=100..109 boundary is kept; check flying mobs have room to move.
+  mobs:
+    ZOMBIE:
+      unlock-wave: 1
+      weight: 40
+      health-multiplier: 1.0
+      baby-chance: 0.10
+      chicken-jockey-chance: 0.015
+      equipment:
+        hand:
+          - {material: STONE_SWORD, chance: 0.25}
+          - {material: IRON_SHOVEL, chance: 0.10}
+          - {material: IRON_SWORD, chance: 0.05}
+        off_hand:
+          - {material: SHIELD, chance: 0.12}
+        head:
+          - {material: LEATHER_HELMET, chance: 0.15}
+          - {material: CHAINMAIL_HELMET, chance: 0.05}
+        chest:
+          - {material: LEATHER_CHESTPLATE, chance: 0.12}
+        legs: []
+        feet: []
+    SPIDER: {unlock-wave: 1, weight: 18, health-multiplier: 1.0}
+    HUSK:
+      unlock-wave: 2
+      weight: 14
+      health-multiplier: 1.0
+      baby-chance: 0.06
+      equipment:
+        hand:
+          - {material: STONE_AXE, chance: 0.20}
+          - {material: STONE_SWORD, chance: 0.10}
+        off_hand:
+          - {material: SHIELD, chance: 0.08}
+        head: []
+        chest: []
+        legs: []
+        feet: []
+    SILVERFISH: {unlock-wave: 2, weight: 4, health-multiplier: 1.0}
+    SKELETON:
+      unlock-wave: 3
+      weight: 16
+      health-multiplier: 1.0
+      rapid-fire: {chance: 0.02, minimum-wave: 8, interval-ticks: 8}
+      equipment:
+        hand:
+          - {material: BOW, chance: 0.90}
+          - {material: STONE_SWORD, chance: 0.10}
+        off_hand: []
+        head:
+          - {material: CHAINMAIL_HELMET, chance: 0.10}
+        chest:
+          - {material: LEATHER_CHESTPLATE, chance: 0.10}
+        legs: []
+        feet: []
+    ENDERMITE: {unlock-wave: 3, weight: 3, health-multiplier: 1.0}
+    CREEPER: {unlock-wave: 4, weight: 7, health-multiplier: 1.0}
+    GOAT: {unlock-wave: 4, weight: 4, health-multiplier: 1.0}
+    LLAMA: {unlock-wave: 4, weight: 4, health-multiplier: 1.0}
+    PILLAGER:
+      unlock-wave: 5
+      weight: 8
+      health-multiplier: 1.0
+      equipment:
+        hand:
+          - {material: CROSSBOW, chance: 1.0}
+        off_hand: []
+        head: []
+        chest: []
+        legs: []
+        feet: []
+    BEE: {unlock-wave: 5, weight: 4, health-multiplier: 1.0}
+    STRAY:
+      unlock-wave: 6
+      weight: 7
+      health-multiplier: 1.0
+      equipment:
+        hand:
+          - {material: BOW, chance: 1.0}
+        off_hand: []
+        head:
+          - {material: IRON_HELMET, chance: 0.08}
+        chest: []
+        legs: []
+        feet: []
+    CAVE_SPIDER: {unlock-wave: 6, weight: 5, health-multiplier: 1.0}
+    WITCH: {unlock-wave: 7, weight: 4, health-multiplier: 0.9}
+    ZOMBIFIED_PIGLIN:
+      unlock-wave: 7
+      weight: 7
+      health-multiplier: 1.0
+      baby-chance: 0.04
+      equipment:
+        hand:
+          - {material: GOLDEN_SWORD, chance: 0.80}
+          - {material: GOLDEN_AXE, chance: 0.20}
+        off_hand: []
+        head: []
+        chest: []
+        legs: []
+        feet: []
+    PIGLIN:
+      unlock-wave: 8
+      weight: 6
+      health-multiplier: 1.0
+      equipment:
+        hand:
+          - {material: CROSSBOW, chance: 0.50}
+          - {material: GOLDEN_SWORD, chance: 0.50}
+        off_hand: []
+        head: []
+        chest: []
+        legs: []
+        feet: []
+    BLAZE: {unlock-wave: 8, weight: 4, health-multiplier: 0.9}
+    BREEZE: {unlock-wave: 9, weight: 3, health-multiplier: 0.85}
+    ENDERMAN: {unlock-wave: 10, weight: 4, health-multiplier: 0.85}
+    WITHER_SKELETON:
+      unlock-wave: 10
+      weight: 6
+      health-multiplier: 1.0
+      equipment:
+        hand:
+          - {material: STONE_SWORD, chance: 0.80}
+          - {material: IRON_SWORD, chance: 0.20}
+        off_hand:
+          - {material: SHIELD, chance: 0.08}
+        head: []
+        chest: []
+        legs: []
+        feet: []
+    PHANTOM: {unlock-wave: 11, weight: 3, health-multiplier: 0.85}
+    VINDICATOR:
+      unlock-wave: 12
+      weight: 4
+      health-multiplier: 0.9
+      equipment:
+        hand:
+          - {material: IRON_AXE, chance: 1.0}
+        off_hand: []
+        head: []
+        chest: []
+        legs: []
+        feet: []
+    PIGLIN_BRUTE:
+      unlock-wave: 12
+      weight: 3
+      health-multiplier: 0.75
+      equipment:
+        hand:
+          - {material: GOLDEN_AXE, chance: 1.0}
+        off_hand: []
+        head: []
+        chest: []
+        legs: []
+        feet: []
+    VEX:
+      unlock-wave: 13
+      weight: 2
+      health-multiplier: 0.85
+      equipment:
+        hand:
+          - {material: IRON_SWORD, chance: 1.0}
+        off_hand: []
+        head: []
+        chest: []
+        legs: []
+        feet: []
+    SHULKER: {unlock-wave: 14, weight: 2, health-multiplier: 0.75}
+    EVOKER: {unlock-wave: 16, weight: 1, health-multiplier: 0.85}
+    IRON_GOLEM: {unlock-wave: 18, weight: 1, health-multiplier: 0.60}
+    RAVAGER: {unlock-wave: 20, weight: 1, health-multiplier: 0.60}
