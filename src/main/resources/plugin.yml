@@ -5,7 +5,7 @@ api-version: '26.3'
 description: Fight mob waves, unlock classes, or compete in duels and team duels.
 authors: [Mineplay]
 website: https://github.com/Articical/SimpleMobArena
-softdepend: [Vault, Essentials, WorldGuard, PlaceholderAPI, Citizens]
+softdepend: [Vault, Essentials, WorldGuard, PlaceholderAPI, Citizens, MineplayAchievements]
 commands:
   mobarena:
     description: Open the arena menu, view results or join a match.
@@ -68,6 +68,7 @@ permissions:
       mobarena.admin.reconcile: true
       mobarena.admin.npc: true
       mobarena.admin.website: true
+      mobarena.admin.achievements: true
   mobarena.admin.create:
     default: op
   mobarena.admin.mode:
@@ -125,4 +126,7 @@ permissions:
     default: op
   mobarena.admin.website:
     description: Inspect website export, backfill matches and retry retained HTTP events.
+    default: op
+  mobarena.admin.achievements:
+    description: Inspect achievement integration and replay a player's saved arena progress.
     default: op

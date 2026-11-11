@@ -154,7 +154,7 @@ class DuelStoreTest {
             store.configureWebsiteExport(true, sourceId, START);
             assertTrue(store.recordDuel(result(UUID.randomUUID(), START.plusSeconds(120))));
             try (var rows = statement.executeQuery("PRAGMA user_version")) {
-                assertTrue(rows.next()); assertEquals(5, rows.getInt(1));
+                assertTrue(rows.next()); assertEquals(6, rows.getInt(1));
             }
         }
     }

@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "cloud.mineplay"
-version = "1.0.10"
+version = "1.0.11"
 
 val mockitoAgent = configurations.create("mockitoAgent")
 
@@ -33,6 +33,7 @@ sourceSets {
 dependencies {
     compileOnly("io.papermc.paper:paper-api:26.3.build.200-stable")
     compileOnly("me.clip:placeholderapi:2.12.3")
+    compileOnly(files("libs/mineplay-achievements-api-1.0.0.jar"))
     implementation("org.xerial:sqlite-jdbc:3.53.4.0")
     implementation("com.mysql:mysql-connector-j:26.7.0")
     implementation("com.google.code.gson:gson:2.14.0")
@@ -40,6 +41,7 @@ dependencies {
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation("io.papermc.paper:paper-api:26.3.build.200-stable")
+    testImplementation(files("libs/mineplay-achievements-api-1.0.0.jar"))
     testImplementation("org.mockito:mockito-core:5.24.0")
     mockitoAgent("org.mockito:mockito-core:5.24.0") { isTransitive = false }
 }

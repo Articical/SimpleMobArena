@@ -1,6 +1,6 @@
 # Mineplay SimpleMobArena — website data and API handoff
 
-Updated for plugin **1.0.8**, ledger schema **5**, on **21 October 2026**. Source mob-match/payout semantics and the existing v1 API payload remain unchanged. See [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md) for publisher configuration, commands and recovery, and [DUELS_API_HANDOFF.md](DUELS_API_HANDOFF.md) for the separate duel endpoint, complete payload and PostgreSQL import requirements. The PostgreSQL DDL and queries below are design examples; the website repository owns its deployed schema and importer.
+Updated for plugin **1.0.11**, ledger schema **6**, on **10 November 2026**. Schema 6 adds local per-mob kill records, live kill checkpoints and authoritative achievement totals. The existing v1 match and duel JSON contracts remain unchanged: **per-mob breakdowns, live checkpoints and achievement progress are not yet exported by those APIs**. See [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md) for publisher configuration, commands and recovery, and [DUELS_API_HANDOFF.md](DUELS_API_HANDOFF.md) for the separate duel endpoint, complete payload and PostgreSQL import requirements. The PostgreSQL DDL and queries below are design examples; the website repository owns its deployed schema and importer.
 
 ## Brief for the website Codex instance
 
@@ -17,7 +17,7 @@ Paper / SimpleMobArena
 
 The website retains its own PostgreSQL copy. It does not query the Minecraft database on every page request, and PostgreSQL does not replace the plugin's SQLite/MySQL backend. The plugin remains responsible for match results, reward eligibility, payments and reconciliation. The website stores and presents those results.
 
-**Implemented in the plugin:** the source tables, reporting views, match/per-player statistics, payment state machine, transactional export snapshots/revisions, durable delivery queue, authenticated HTTPS publisher, retry/quarantine handling and resumable backfill.
+**Implemented in the plugin:** the source tables, reporting views, match/per-player statistics, per-match and lifetime mob-type counters, achievement progress derived from committed history, payment state machine, transactional export snapshots/revisions, durable delivery queue, authenticated HTTPS publisher, retry/quarantine handling and resumable backfill. The existing publisher exports aggregate kills; the new typed counters are local source data pending a separately agreed website contract.
 
 **Integration boundary:** the plugin targets the website's v1 full-snapshot contract at `https://www.mineplay.co.uk/api/integrations/simple-mob-arena/v1/match-snapshots`. Export is disabled by default until its stable source UUID and bearer credential are registered. It has no PostgreSQL driver: the website owns PostgreSQL persistence. This document's original schema/query examples are illustrative; the website's `SnapshotContract.cs`, `SnapshotValidator.cs` and importer are the receiver authority. Deployment and live end-to-end acceptance are separate from plugin implementation.
 
@@ -37,24 +37,27 @@ With SQLITE, the plugin data folder contains:
 
 | Item | Purpose | Send to website? |
 | --- | --- | --- |
-| mobarena.db | Match ledger, participants, settlements and settlement audit | Export the allowlisted fields below through the API |
+| mobarena.db | Match ledger, participants, per-mob kills, settlements and settlement audit | Export only the allowlisted fields below; per-mob kills are not in v1 |
 | equipment.db | Inventory snapshots and recovery state | No |
 | settlement-outbox/ | Durable binary handoff from finished match to the plugin's SQL ledger | No; this is not a website delivery queue |
 | duel-outbox/ | Durable handoff for finished duel results before SQL insertion | No; export the duel snapshot instead |
 | config.yml | Storage credentials, economy, waves, sounds and other settings | No |
 | arenas/*.yml | Current arena IDs/names, boundaries, spawns and settings | Not in the initial match API |
 | classes.yml | Current equipment/class definitions | No |
+| achievements.yml | Mob Arena achievement definitions, thresholds and display settings | No; used by the optional MineplayAchievements integration |
 | npc-menus.yml | Citizens NPC UUID/ID links to the arena menu | No |
 
 With MYSQL, ledger and equipment tables share the configured MySQL database. Both local outbox directories are still used. Neither storage option writes directly to website PostgreSQL.
 
 Schema 5 adds separate `duels` and `duel_participants` tables, with mode, winning team, roster assignments and PvP performance. Their delivery tables are `website_duel_export_state`, `website_duel_revisions` and `website_duel_export_events`. Duels never enter the mob participation, class-unlock, payout or leaderboard aggregates described below. The new website route still requires receiver implementation; its full contract is in [DUELS_API_HANDOFF.md](DUELS_API_HANDOFF.md).
 
-Only matches that actually started are persisted. Leaving/cancelling a lobby before the match starts produces no stored match. After a started match ends, the plugin saves its result to the durable local outbox, then inserts the match, all participants and all initial settlements in one SQL transaction. Replaying the same session UUID does not insert a duplicate.
+Schema 6 adds `participant_mob_kills` for finished results and `live_mob_kills` for durable checkpoints while players are fighting. Both are keyed by match UUID, player UUID and mob type and supported in SQLite and MySQL. Existing aggregate-only history is preserved unchanged; the plugin cannot recover mob types for kills recorded before this update. Offline SQLite/MySQL migration copies and verifies both tables alongside the rest of the ledger.
 
-Eliminated players, voluntary leavers and disconnected players remain in the finished roster with their contributions. SQL outages can delay appearance of a finished match. Abruptly interrupted active matches are not resumed and are not automatically converted into completed match records. A graceful stop cancels started matches and records them without a payout.
+Only matches that actually started are persisted. Leaving/cancelling a lobby before the match starts produces no stored match. During a match, credited kills can be checkpointed without creating a completed match or payout. After a started match ends, the plugin saves its result to the durable local outbox, then inserts the match, all participants, recorded mob-type counts and all initial settlements in one SQL transaction. That same transaction removes its live checkpoints after verifying that the final roster/counts cover all checkpointed kills. Replaying the same session UUID does not insert a duplicate or increase any kill count. Settlement outbox format 2 includes the typed counts; format 1 records from older versions still replay with an empty typed breakdown. The outbox format, ledger schema and HTTP schema are separate version numbers.
 
-There is no separate source players table: lifetime statistics are aggregates over match participation and settlements.
+Eliminated players, voluntary leavers and disconnected players remain in the finished roster with their contributions. SQL outages can delay appearance of a finished match. Abruptly interrupted active matches are not resumed and are not automatically converted into completed match records. Their committed kill checkpoints survive for achievement progress, without inventing match history or a payout; kills not yet checkpointed can be lost in an abrupt stop. A graceful stop cancels started matches and records them without a payout.
+
+There is no separate source players table: finished-match statistics are aggregates over participation and settlements. Achievement kill totals also include unfinished durable checkpoints, as described below.
 
 Since 1.0.7, class access can require `classes.<id>.required-kills` in the plugin's `classes.yml`. It uses the same lifetime kill aggregate, including cancelled/zero-reward matches. There is no saved unlock flag or selected-class field in a match, and the v1 API does not export class definitions or thresholds. A website showing class progress would need the actual server thresholds separately; do not assume fresh-install defaults apply to an upgraded server.
 
@@ -89,6 +92,40 @@ Primary key: (session_id, player_id). session_id references sessions.
 | damage | Recorded damage dealt to registered active mobs; finite, nonnegative floating-point health points, not money. Each recorded hit is capped to the target's remaining health. |
 | participation_seconds | Whole seconds from match start to first departure or match finish. Excludes lobby time, includes intermissions. |
 
+### participant_mob_kills — recorded types for one player in one match
+
+Added in ledger schema 6. Primary key: `(session_id, player_id, mob_type)`. The `(session_id, player_id)` pair references `participants`.
+
+| Column | Meaning |
+| --- | --- |
+| session_id | Match UUID. |
+| player_id | Credited player's Minecraft UUID. |
+| mob_type | Uppercase entity-type identifier, for example `ZOMBIE`, `SKELETON`, `IRON_GOLEM` or `BEE`. Source validation permits `[A-Z][A-Z0-9_]{0,63}`. |
+| kills | Nonnegative integer credited to that player for that type in this match. |
+
+The application validates that a participant's summed typed counts do not exceed `participants.kills`. Finished-match per-type totals are `SUM(kills)` grouped by `player_id, mob_type`; lifetime achievement totals additionally include unfinished checkpoints from `live_mob_kills`. Both are derived from canonical rows, not a separately incremented counter. The `(player_id, mob_type)` index supports those lookups. SQLite stores the identifiers as TEXT; MySQL uses VARCHAR(36) for UUIDs and VARCHAR(64) for the type.
+
+Typed history starts with matches recorded by the updated plugin. Older matches and pending format 1 outbox records retain their aggregate kills but have no typed rows. An absent row does not prove that a player never killed that type before tracking began. Do not split old aggregate totals between types or assume `SUM(typed kills) = total lifetime kills`. There is no stored per-match coverage flag or tracking-start timestamp, so an empty breakdown alone cannot distinguish legacy history from a new zero-kill match.
+
+These rows are **not included in the existing v1 match-snapshot payload, duel payload or reporting views**. A website consuming the current APIs has no per-type history to display. Adding it requires an agreed exporter/receiver extension and coverage semantics; do not add a required field to the current v1 importer based on this source-table description.
+
+### live_mob_kills — unfinished match checkpoints
+
+Also added in schema 6. Primary key: `(session_id, player_id, mob_type)`. There is deliberately no participant foreign key: the finished match and its roster do not exist yet.
+
+| Column | Meaning |
+| --- | --- |
+| session_id, player_id, mob_type | Match UUID, credited player UUID and uppercase type, using the same physical types as `participant_mob_kills`. |
+| player_name | Recorded name for achievement snapshots; TEXT in SQLite and VARCHAR(64) in MySQL. |
+| kills | Absolute nonnegative integer count for this player/type in this match, never a delivery delta. |
+| updated_at | UTC checkpoint timestamp for name selection; TEXT in SQLite and VARCHAR(40) in MySQL. Not a match finish time or website revision. |
+
+The plugin coalesces kill changes, submits batches every 10 ticks and writes them on the ledger worker. Each checkpoint merges the greatest recorded value per type, so duplicates, omitted types and older snapshots cannot reduce counts. The achievement bridge receives absolute totals after the checkpoint transaction commits. Database outages delay this progress; they do not cause SQL or HTTP work to run on the Paper thread.
+
+On finalization, the plugin validates that the final participant roster and per-type counts contain every checkpointed kill, then inserts final records and deletes that session's live rows atomically. A result that would discard committed kill evidence is rejected for recovery. Late checkpoints for an already finalized session are ignored. Finalization, cancellation and replay therefore count each kill once; checkpoints for other arenas/players remain independent.
+
+Unfinished checkpoints survive restart and offline database migration. They do not create `sessions`, `participants`, settlements, completed-wave totals or website export events. A checkpoint left after a crash continues contributing to achievement kill totals even though no finished match exists. It is not a resumable game state or proof that the arena is still running. The existing in-game match statistics, class-unlock kill totals and website v1 aggregates remain based on finished match records; achievement kill progress can therefore be ahead of those figures.
+
 ### settlements — one current payout record per player per match
 
 Primary key: settlement_id. Unique pair: (session_id, player_id). The application inserts one settlement per participant, including zero-payment cases.
@@ -113,7 +150,7 @@ The source database does not enforce a composite settlement-to-participant forei
 
 - **settlement_audit:** append-only transition evidence: id (auto-increment), settlement_id (nullable reference), event_at, actor, event and detail. Actor can identify an administrator. This is operational evidence, not a public event API. Omit raw actor/detail from website ingestion.
 - **equipment_snapshots:** player_uuid primary key, unique recovery token, choice, original inventory blob, nullable restore_target blob, status, created_at and updated_at. Status is PREPARED, RESTORING or CONFIRMED. This is recovery state, not historical per-match kit data; a later join can replace a confirmed row. Do not export inventory blobs or recovery tokens.
-- **mobarena_schema:** MySQL schema-version metadata, keyed by component; ledger is version 5 and equipment is version 1. SQLite keeps the equivalent versions in each database's PRAGMA user_version.
+- **mobarena_schema:** MySQL schema-version metadata, keyed by component; ledger is version 6 and equipment is version 1. SQLite keeps the equivalent versions in each database's PRAGMA user_version.
 - **website_export_state**, **website_match_revisions**, **website_export_events:** schema 4 source identity, monotonically increasing match revisions, exact UTF-8 snapshots and durable delivery/backfill state. These are internal publisher records, not additional payload fields; see [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md).
 - **mobarena_migration_guard:** operational guard used by the offline storage migration tool; not website data.
 
@@ -168,15 +205,36 @@ The default minimums are three completed team waves, 60 seconds of individual pa
 
 ### Gameplay data not directly recorded for mob matches
 
-Mob matches have no stored per-player elimination waves, exit reasons/timestamps, death counts, selected classes, mob-type kill breakdowns, per-wave results, survivor lists, explicit victory flag, arena display-name snapshot, configured maximum waves, historical mob-health settings, or per-match plugin/server version. Duel records separately include teams, winner and elimination flags, as specified in the duel handoff.
+Mob matches have no stored per-player elimination waves, exit reasons/timestamps, death counts, selected classes, per-wave results, survivor lists, explicit victory flag, arena display-name snapshot, configured maximum waves, historical mob-health settings, or per-match plugin/server version. Mob-type breakdowns are now stored locally for new records, but are unavailable through the existing v1 API. Duel records separately include teams, winner and elimination flags, as specified in the duel handoff.
 
 starting_player_count is not an explicit column. For normal current matches it can be derived from roster size: lobby departures are removed, late joins are disallowed, and post-start departures stay in the roster. Treat this as a derived roster count, with unknown/null provenance for anomalous/imported data rather than inventing an exact historical snapshot.
 
 There is no live-match HTTP feed or match ledger updated_at column. Schema 4 stores source identity, export revisions and the backfill cursor in separate website export tables. Equipment updated_at is unrelated to match synchronization.
 
+### Authoritative achievement progress
+
+The plugin reads immutable `AchievementProgress(playerId, playerName, totals)` snapshots from committed SQL history and unfinished kill checkpoints on its ledger worker. These are absolute nonnegative 64-bit totals. Replaying one must not add its values to previous progress. The optional MineplayAchievements integration uses the namespace `mineplay_mobarena`; its service calls are separate from the website match publisher.
+
+| Local source key | Source and meaning |
+| --- | --- |
+| `total_kills` | Sum of `participants.kills` across all recorded mob matches plus unfinished checkpoint kills. Includes cancelled/zero-reward matches and legacy untyped kills. PvP kills are excluded. |
+| `matches_played` | Count of recorded mob-match participation rows, including cancelled and zero-reward matches. Lobby-only joins are excluded. |
+| `highest_wave` | Greatest team `completed_waves` among the player's recorded mob matches, including cancelled matches. This is not the player's personal survival wave. |
+| `duels_played` | Count of the player's recorded duel participation rows, including cancelled duels. |
+| `duel_wins` | Count of noncancelled duels whose winning team equals the player's recorded team. Draws and cancelled duels contribute zero. |
+| `<mob_type_lowercase>_kills` | Sum of final typed kills and unfinished checkpoint kills, for example `zombie_kills` or `iron_golem_kills`. Includes recorded cancelled-match contributions; older untyped kills contribute nothing. |
+
+For example, a player with 20 legacy kills followed by a new match containing 6 zombies and 4 skeletons has `total_kills = 30`, `zombie_kills = 6` and `skeleton_kills = 4`. Missing typed sources default to zero for achievement evaluation, meaning zero recorded typed kills, not a claim about the player's untracked history.
+
+The snapshot uses the most recent recorded name across mob matches, duels and live checkpoints, falling back to the UUID if no history exists. Replay pages distinct player UUIDs from all three sources, including offline, duel-only and checkpoint-only players. Kill checkpoints refresh achievements while a match is running; match completion refreshes the match/wave sources after SQL commit. In-memory kills become durable achievement progress only after their checkpoint or final result commits. There is no mob-match `matches_won` source: the existing roster and free-text end reason do not reliably identify personal victories.
+
+These totals are internal integration data, not new fields or a new endpoint in the website v1 API. The website can derive the existing aggregate mob statistics from imported match snapshots, but cannot derive typed kill achievements from that payload. Achievement definitions and unlock state are not included in the match export either.
+
 ## 3. API contract
 
 Plugin 1.0.6 implements this v1 snapshot contract against the website receiver. [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md) describes its configuration and stricter validation/bounds. Website deployment remains separately managed.
+
+Plugin 1.0.11 keeps this contract unchanged. Ledger schema 6 does not change `schema_version: 1` or add `mob_kills`, achievement totals, definitions or unlocks to the JSON below.
 
 ### Transport
 
@@ -299,7 +357,7 @@ The existing settlement-outbox is removed after SQL preparation and contains no 
 
 HTTP delivery runs on a dedicated background worker with timeouts, separate from the ledger worker and Paper server thread. Events are retained, acknowledgements committed, and queue age/failures exposed through `/ma admin website status`. The publisher does not coalesce events or wait for HTTP inside a ledger transaction.
 
-Backfill uses this same snapshot protocol in resumable batches serialized with normal mutations. Offline StorageMigration now copies and verifies source identity, revision state, exact event payload bytes and delivery/backfill metadata across SQLite/MySQL migration. The source must already be upgraded to schema 4; see [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md) for the upgrade and ownership procedure.
+Backfill uses this same snapshot protocol in resumable batches serialized with normal mutations. Offline StorageMigration copies and verifies source identity, revision state, exact event payload bytes, delivery/backfill metadata, final per-mob rows and unfinished kill checkpoints across SQLite/MySQL migration. The source must already be upgraded to the current ledger schema (6); see [WEBSITE_EXPORT.md](WEBSITE_EXPORT.md) for the upgrade and ownership procedure. HTTP backfill still sends the existing v1 allowlisted fields and therefore does not export typed rows or live checkpoints.
 
 Do not synchronize only WHERE finished_at > last_seen: payments and unallocated_pot can change long after that time. Do not order by payment status or equipment updated_at. A deliberate source database rollback/replacement needs an explicit resynchronization/fencing process; reusing lower revisions would leave the website ahead of the restored ledger.
 
@@ -469,6 +527,7 @@ Render unknown fields as unavailable, not zero or invented values. Expose large 
 10. Test decimal shares/rounding, large integer serialization, missing optional paid timestamps, UUID-name fallback and unknown cap reason codes.
 11. Reject an authenticated source trying to submit another source's data. Keep ingestion credentials out of browser bundles and public responses.
 12. Confirm that the website works using its PostgreSQL data while the Minecraft server is offline.
+13. Accept existing v1 payloads unchanged after the plugin upgrades to schema 6. Do not require per-mob fields or show missing typed history as an all-time zero; the current publisher does not send it.
 
 ## 6. Source references and scope of this handoff
 
@@ -477,8 +536,10 @@ Repository-relative implementation references:
 - src/main/resources/db/001-initial.sql and 001-mysql.sql — initial ledger tables/types.
 - src/main/resources/db/002-match-details.sql — player_name and end_reason.
 - src/main/resources/db/003-reporting-views.sql and 003-reporting-views-mysql.sql — existing reporting semantics.
+- src/main/resources/db/006-mob-kills.sql and 006-mob-kills-mysql.sql — per-player, per-match mob-type records.
 - src/cloud/mineplay/mobarena/storage/SettlementStore.java — preparation, transitions, statistics/history, timestamps and audit.
 - src/cloud/mineplay/mobarena/economy/SessionResult.java, MatchDetails.java, MatchPerformance.java and PlayerStatistics.java — current detached Java data objects.
+- src/cloud/mineplay/mobarena/economy/AchievementProgress.java and achievements/AchievementCatalog.java — immutable progress totals and supported achievement sources; separate from website JSON.
 - src/cloud/mineplay/mobarena/economy/RewardCalculator.java and EconomySettings.java — money allocation, reason codes and settings.
 - src/cloud/mineplay/mobarena/economy/EconomyService.java — durable result handoff, SQL worker, payment/reconciliation lifecycle.
 - src/cloud/mineplay/mobarena/storage/SettlementOutbox.java — existing local SQL-delivery outbox.

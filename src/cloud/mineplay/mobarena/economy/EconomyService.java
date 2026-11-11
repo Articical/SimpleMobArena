@@ -56,6 +56,11 @@ public final class EconomyService implements AutoCloseable {
     private final BukkitTask pumpTask;
     private final BukkitTask reconnectTask;
     private final BukkitTask websiteBackfillTask;
+    private final BukkitTask liveKillsTask;
+    private final java.util.Map<LiveKillKey,LiveKillSnapshot> liveKills = new java.util.LinkedHashMap<>();
+    private final AtomicBoolean liveKillsWriting = new AtomicBoolean();
+    private volatile long nextLiveKillFlush;
+    private volatile int liveKillBackoff = 1;
     private final WebsiteExportSettings websiteSettings;
     private final PublisherFactory publisherFactory;
     private final AtomicBoolean backfilling = new AtomicBoolean();
@@ -66,6 +71,8 @@ public final class EconomyService implements AutoCloseable {
     private volatile String configurationError;
     private volatile String ledgerError;
     private volatile boolean closing;
+    private volatile java.util.function.Consumer<UUID> achievementCheckpoint;
+    private volatile java.util.function.Consumer<AchievementProgress> liveAchievementCheckpoint;
 
     public EconomyService(JavaPlugin plugin) {
         this(plugin, new VaultGateway(plugin), SettlementStore::new);
@@ -110,6 +117,7 @@ public final class EconomyService implements AutoCloseable {
             if (!closing && ledgerError != null && ready.isDone() && !pumping.get()) initialize(ready);
         }, 600L, 600L);
         websiteBackfillTask = scheduler.runTaskTimer(plugin, this::pumpWebsiteBackfill, 40L, 40L);
+        liveKillsTask = scheduler.runTaskTimer(plugin, this::flushMobKills, 10L, 10L);
     }
 
     public boolean reload(ConfigurationSection section) {
@@ -145,6 +153,7 @@ public final class EconomyService implements AutoCloseable {
                 boolean created = store.prepare(result, snapshot, Instant.now());
                 notifications.prepared(store, result.arenaId(), result.sessionId(), snapshot);
                 outbox.remove(result.sessionId());
+                achievementCheckpoint(result.participants().stream().map(SessionResult.Participant::playerId).toList());
                 if (snapshot.auditLogging()) logger.info("Arena settlement " + result.sessionId() + " arena=" + result.arenaId()
                         + " pot=" + result.prizePot() + " cancelled=" + result.cancelled() + " created=" + created);
             } catch (Exception exception) { throw new CompletionException(exception); }
@@ -153,6 +162,116 @@ public final class EconomyService implements AutoCloseable {
 
     public CompletableFuture<PlayerStatistics> stats(UUID player) {
         return submit(store -> { try { return store.stats(player); } catch (Exception error) { throw new CompletionException(error); } });
+    }
+
+    public CompletableFuture<AchievementProgress> achievementProgress(UUID player) {
+        return submit(store -> {
+            try { return store.achievementProgress(player); }
+            catch (Exception error) { throw new CompletionException(error); }
+        });
+    }
+
+    public CompletableFuture<List<UUID>> achievementPlayers(UUID after, int limit) {
+        return submit(store -> {
+            try { return store.achievementPlayers(after,limit); }
+            catch (Exception error) { throw new CompletionException(error); }
+        });
+    }
+
+    public CompletableFuture<java.util.Map<String,Long>> mobKills(UUID player) {
+        return submit(store -> {
+            try { return store.mobKills(player); }
+            catch (Exception error) { throw new CompletionException(error); }
+        });
+    }
+
+    public CompletableFuture<java.util.Map<String,Integer>> matchMobKills(UUID session, UUID player) {
+        return submit(store -> {
+            try { return store.matchMobKills(session,player); }
+            catch (Exception error) { throw new CompletionException(error); }
+        });
+    }
+
+    public void setAchievementCheckpoint(java.util.function.Consumer<UUID> callback) { achievementCheckpoint = callback; }
+    public void setLiveAchievementCheckpoint(java.util.function.Consumer<AchievementProgress> callback) { liveAchievementCheckpoint = callback; }
+
+    /** Copy current match counters only; the game thread never performs storage or API work here. */
+    public void recordMobKills(UUID session, UUID player, String name, java.util.Map<String,Integer> counts) {
+        if (closing) return;
+        LiveKillKey key = new LiveKillKey(session,player);
+        synchronized (liveKills) {
+            liveKills.merge(key,new LiveKillSnapshot(name,java.util.Map.copyOf(counts)),LiveKillSnapshot::merge);
+        }
+    }
+
+    /** Coalesce rapid kills into bounded background batches, with one batch in flight. */
+    void flushMobKills() {
+        if (closing || System.nanoTime() < nextLiveKillFlush || !liveKillsWriting.compareAndSet(false,true)) return;
+        var batch = new java.util.LinkedHashMap<LiveKillKey,LiveKillSnapshot>();
+        synchronized (liveKills) {
+            // FIFO order keeps continuously active players from starving later arenas.
+            var entries = liveKills.entrySet().iterator();
+            while (entries.hasNext() && batch.size() < 32) {
+                var entry = entries.next();
+                batch.put(entry.getKey(),entry.getValue()); entries.remove();
+            }
+        }
+        if (batch.isEmpty()) { liveKillsWriting.set(false); return; }
+        submit(store -> {
+            var progress = new java.util.ArrayList<AchievementProgress>();
+            for (var entry : batch.entrySet()) try {
+                LiveKillKey key = entry.getKey(); LiveKillSnapshot snapshot = entry.getValue();
+                progress.add(store.checkpointMobKills(key.session(),key.player(),snapshot.name(),snapshot.counts()));
+            } catch (Exception error) { throw new CompletionException(error); }
+            return List.copyOf(progress);
+        }).whenComplete((progress,error) -> {
+            if (error != null) {
+                // Absolute maxima are safe to retry even if an earlier row in this batch committed.
+                synchronized (liveKills) {
+                    batch.forEach((key,snapshot) -> liveKills.merge(key,snapshot,(newer,older) -> LiveKillSnapshot.merge(older,newer)));
+                }
+                nextLiveKillFlush = System.nanoTime() + TimeUnit.SECONDS.toNanos(liveKillBackoff);
+                liveKillBackoff = Math.min(60,liveKillBackoff * 2);
+                if (!closing) failLedger(error);
+            } else {
+                liveKillBackoff = 1; nextLiveKillFlush = 0;
+                if (!closing && liveAchievementCheckpoint != null) try {
+                    scheduler.runTask(plugin,() -> {
+                        var callback = liveAchievementCheckpoint;
+                        if (closing || callback == null) return;
+                        for (AchievementProgress snapshot : progress) try { callback.accept(snapshot); }
+                        catch (RuntimeException | LinkageError failure) { logger.log(Level.WARNING,"Live achievement feedback failed; saved totals will replay",failure); }
+                    });
+                } catch (RuntimeException failure) {
+                    if (!closing) logger.warning("Live achievement feedback could not be scheduled; saved totals will replay.");
+                }
+            }
+            liveKillsWriting.set(false);
+        });
+    }
+
+    private record LiveKillKey(UUID session,UUID player) {}
+    private record LiveKillSnapshot(String name,java.util.Map<String,Integer> counts) {
+        private static LiveKillSnapshot merge(LiveKillSnapshot first,LiveKillSnapshot second) {
+            var totals = new java.util.HashMap<>(first.counts());
+            second.counts().forEach((type,count) -> totals.merge(type,count,Math::max));
+            return new LiveKillSnapshot(second.name(),java.util.Map.copyOf(totals));
+        }
+    }
+
+    private void achievementCheckpoint(List<UUID> players) {
+        if (closing || achievementCheckpoint == null) return;
+        try {
+            scheduler.runTask(plugin,() -> {
+                var callback = achievementCheckpoint;
+                if (closing || callback == null) return;
+                for (UUID player : players) try { callback.accept(player); }
+                catch (RuntimeException error) { logger.log(Level.WARNING,"Achievement sync request failed; saved totals remain available for replay",error); }
+            });
+        } catch (RuntimeException error) {
+            // Optional feedback cannot invalidate a committed ledger transaction or retained result.
+            if (!closing) logger.log(Level.WARNING,"Achievement sync could not be scheduled; saved totals remain available for replay",error);
+        }
     }
 
     /** Durably record a completed duel without adding PvP kills to mob rewards or class unlocks. */
@@ -166,6 +285,7 @@ public final class EconomyService implements AutoCloseable {
             try {
                 current.join().recordDuel(result);
                 duelOutbox.remove(result.sessionId());
+                achievementCheckpoint(result.participants().stream().map(DuelResult.Participant::playerId).toList());
             } catch (Exception exception) { throw new CompletionException(exception); }
         }, worker).whenComplete((ignored, error) -> { if (error != null) failLedger(error); });
     }
@@ -396,11 +516,13 @@ public final class EconomyService implements AutoCloseable {
                     opened.prepare(entry.result(), entry.settings(), Instant.now());
                     notifications.prepared(opened, entry.result().arenaId(), entry.result().sessionId(), entry.settings());
                     outbox.remove(entry.result().sessionId());
+                    achievementCheckpoint(entry.result().participants().stream().map(SessionResult.Participant::playerId).toList());
                     logger.info("Recovered durable session result " + entry.result().sessionId());
                 }
                 for (DuelResult result : duelOutbox.entries()) {
                     opened.recordDuel(result);
                     duelOutbox.remove(result.sessionId());
+                    achievementCheckpoint(result.participants().stream().map(DuelResult.Participant::playerId).toList());
                     logger.info("Recovered durable duel result " + result.sessionId());
                 }
                 ledgerError = null;
@@ -435,6 +557,7 @@ public final class EconomyService implements AutoCloseable {
         pumpTask.cancel();
         reconnectTask.cancel();
         websiteBackfillTask.cancel();
+        liveKillsTask.cancel();
         // Drain local handoffs before shutting down SQL, even when its connection is stalled.
         outboxWriter.shutdown();
         try {

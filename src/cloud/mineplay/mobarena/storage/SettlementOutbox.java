@@ -22,6 +22,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
 
 /** Durable local handoff for completed results, including when the remote SQL backend is unavailable. */
@@ -34,7 +36,7 @@ public final class SettlementOutbox {
         byte[] encoded = encode(new Entry(result, settings));
         Path destination = directory.resolve(result.sessionId() + ".pending");
         if (Files.exists(destination)) {
-            if (!Arrays.equals(encoded, Files.readAllBytes(destination))) throw new IOException("Conflicting outbox entry for session " + result.sessionId());
+            if (!sameRecord(encoded, Files.readAllBytes(destination))) throw new IOException("Conflicting outbox entry for session " + result.sessionId());
             return;
         }
         Path temporary = directory.resolve(result.sessionId() + ".writing");
@@ -59,7 +61,7 @@ public final class SettlementOutbox {
                 if (filename.equals(entry.result().sessionId() + ".writing")) {
                     Path destination = directory.resolve(entry.result().sessionId() + ".pending");
                     if (Files.exists(destination)) {
-                        if (!Arrays.equals(Files.readAllBytes(file), Files.readAllBytes(destination))) throw new IOException("Conflicting outbox publication records");
+                        if (!sameRecord(Files.readAllBytes(file), Files.readAllBytes(destination))) throw new IOException("Conflicting outbox publication records");
                         Files.delete(file);
                         continue;
                     }
@@ -77,7 +79,7 @@ public final class SettlementOutbox {
     private static byte[] encode(Entry entry) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         try (DataOutputStream out = new DataOutputStream(bytes)) {
-            out.writeInt(0x534D4131); out.writeInt(1);
+            out.writeInt(0x534D4131); out.writeInt(2);
             SessionResult r = entry.result();
             out.writeUTF(r.sessionId().toString()); out.writeUTF(r.arenaId());
             out.writeUTF(r.startedAt().toString()); out.writeUTF(r.finishedAt().toString());
@@ -86,6 +88,10 @@ public final class SettlementOutbox {
             for (var p : r.participants()) {
                 out.writeUTF(p.playerId().toString()); out.writeUTF(p.playerName()); out.writeInt(p.kills());
                 out.writeDouble(p.damage()); out.writeLong(p.participationSeconds());
+                out.writeInt(p.mobKills().size());
+                for (var kills : new TreeMap<>(p.mobKills()).entrySet()) {
+                    out.writeUTF(kills.getKey()); out.writeInt(kills.getValue());
+                }
             }
             EconomySettings s = entry.settings();
             out.writeBoolean(s.enabled()); out.writeUTF(s.baseWaveReward().toPlainString()); out.writeBoolean(s.multiplyByWave());
@@ -104,14 +110,26 @@ public final class SettlementOutbox {
         byte[] payload = Arrays.copyOf(encoded, encoded.length - 32);
         if (!MessageDigest.isEqual(hash(payload), Arrays.copyOfRange(encoded, payload.length, encoded.length))) throw new IOException("Settlement outbox checksum mismatch");
         try (var in = new DataInputStream(new ByteArrayInputStream(payload))) {
-            if (in.readInt() != 0x534D4131 || in.readInt() != 1) throw new IOException("Unsupported settlement outbox format");
+            if (in.readInt() != 0x534D4131) throw new IOException("Unsupported settlement outbox format");
+            int version = in.readInt();
+            if (version != 1 && version != 2) throw new IOException("Unsupported settlement outbox format");
             UUID id = UUID.fromString(in.readUTF()); String arena = in.readUTF();
             Instant started = Instant.parse(in.readUTF()), finished = Instant.parse(in.readUTF());
             int waves = in.readInt(); BigDecimal pot = decimal(in); boolean cancelled = in.readBoolean(); String reason = in.readUTF();
             int count = in.readInt(); if (count < 0 || count > 10000) throw new IOException("Invalid outbox participant count");
             var participants = new ArrayList<SessionResult.Participant>();
-            for (int index = 0; index < count; index++) participants.add(new SessionResult.Participant(UUID.fromString(in.readUTF()),
-                    in.readUTF(), in.readInt(), in.readDouble(), in.readLong()));
+            for (int index = 0; index < count; index++) {
+                UUID player = UUID.fromString(in.readUTF()); String name = in.readUTF();
+                int kills = in.readInt(); double damage = in.readDouble(); long seconds = in.readLong();
+                Map<String, Integer> mobKills = new TreeMap<>();
+                if (version >= 2) {
+                    int types = in.readInt();
+                    if (types < 0 || types > 256) throw new IOException("Invalid outbox mob type count");
+                    for (int type = 0; type < types; type++)
+                        if (mobKills.put(in.readUTF(),in.readInt()) != null) throw new IOException("Duplicate outbox mob type");
+                }
+                participants.add(new SessionResult.Participant(player,name,kills,damage,seconds,mobKills));
+            }
             var result = new SessionResult(id, arena, started, finished, waves, pot, participants, cancelled, reason);
             var settings = new EconomySettings(in.readBoolean(), decimal(in), in.readBoolean(), in.readBoolean(), decimal(in), decimal(in),
                     decimal(in), decimal(in), decimal(in), Duration.parse(in.readUTF()), in.readInt(), in.readLong(), in.readInt(), in.readLong(), decimal(in), in.readBoolean());
@@ -121,6 +139,9 @@ public final class SettlementOutbox {
     }
 
     private static BigDecimal decimal(DataInputStream in) throws IOException { return new BigDecimal(in.readUTF()); }
+    private static boolean sameRecord(byte[] a, byte[] b) throws IOException {
+        return Arrays.equals(a,b) || decode(a).equals(decode(b));
+    }
     private static byte[] hash(byte[] bytes) {
         try { return MessageDigest.getInstance("SHA-256").digest(bytes); }
         catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }

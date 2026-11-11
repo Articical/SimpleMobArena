@@ -11,6 +11,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -41,12 +42,15 @@ class MySqlStorageIntegrationTest {
                 UUID player = UUID.randomUUID();
                 UUID session = UUID.randomUUID();
                 UUID token = UUID.randomUUID();
+                UUID livePlayer = UUID.randomUUID(), liveSession = UUID.randomUUID();
                 var duel = DuelStoreTest.result(UUID.randomUUID(), DuelStoreTest.START.plusSeconds(120));
                 double preciseDamage = 123.45678901234567;
                 try (var ledger = new SettlementStore(sqlite); var equipment = new SnapshotStore(sqlite)) {
+                    ledger.checkpointMobKills(liveSession, livePlayer, "LiveMySqlPlayer", Map.of("GOAT", 2));
                     ledger.recordDuel(duel);
                     ledger.prepare(new SessionResult(session, "roof", start, start.plusSeconds(120), 3, new BigDecimal("123.45"),
-                            List.of(new SessionResult.Participant(player, "MySqlPlayer", 10, preciseDamage, 120)), false, "ELIMINATED"), EconomySettings.defaults(), start.plusSeconds(120));
+                            List.of(new SessionResult.Participant(player, "MySqlPlayer", 10, preciseDamage, 120,
+                            Map.of("ZOMBIE", 7, "SKELETON", 3))), false, "ELIMINATED"), EconomySettings.defaults(), start.plusSeconds(120));
                     var payment = ledger.claim(ledger.pending(1).getFirst().settlementId(), EconomySettings.defaults(), start.plusSeconds(121));
                     ledger.complete(payment.settlementId(), Settlement.Status.CONFIRMED, "", start.plusSeconds(122));
                     equipment.prepare(new SnapshotStore.Entry(player, token, "knight", new byte[]{0, 1, -1, 127}, null, SnapshotStore.Status.PREPARED));
@@ -56,14 +60,23 @@ class MySqlStorageIntegrationTest {
                 var originalQueue = StorageMigrationTest.exportData(sqlite);
                 var first = StorageMigration.migrate(sqlite, mysql, true);
                 assertEquals(1, first.rows().get("sessions"));
+                assertEquals(2, first.rows().get("participant_mob_kills"));
+                assertEquals(1, first.rows().get("live_mob_kills"));
                 assertEquals(3, first.rows().get("website_export_events"));
                 assertEquals(1, first.rows().get("duels"));
                 assertEquals(2, first.rows().get("duel_participants"));
                 assertEquals(originalQueue, StorageMigrationTest.exportData(mysql));
                 try (var ledger = new SettlementStore(mysql); var equipment = new SnapshotStore(mysql)) {
+                    assertEquals(2L, ledger.achievementProgress(livePlayer).totals().get("goat_kills"));
+                    ledger.checkpointMobKills(liveSession, livePlayer, "LiveMySqlPlayer", Map.of("GOAT", 3));
+                    assertEquals(3L, ledger.checkpointMobKills(liveSession, livePlayer, "LiveMySqlPlayer", Map.of("GOAT", 1)).totals().get("total_kills"));
                     assertEquals(duel, ledger.duelMatch(duel.sessionId()));
                     assertFalse(ledger.recordDuel(duel));
                     assertEquals("MySqlPlayer", ledger.match(session).participants().getFirst().playerName());
+                    assertEquals(Map.of("ZOMBIE", 7, "SKELETON", 3), ledger.matchMobKills(session, player));
+                    assertEquals(Map.of("ZOMBIE", 7L, "SKELETON", 3L), ledger.mobKills(player));
+                    assertEquals(10L, ledger.achievementProgress(player).totals().get("total_kills"));
+                    assertTrue(ledger.achievementPlayers(null, 100).contains(player));
                     assertEquals(Double.doubleToRawLongBits(preciseDamage), Double.doubleToRawLongBits(ledger.match(session).participants().getFirst().damage()));
                     RewardCalculatorTest.assertMoney("123.45", ledger.stats(player).earned());
                     assertEquals(Settlement.Status.CONFIRMED, ledger.history(player, 1).getFirst().status());
@@ -85,15 +98,20 @@ class MySqlStorageIntegrationTest {
                 var remoteQueue = StorageMigrationTest.exportData(mysql);
                 var roundtrip = StorageMigration.migrate(mysql, returned, true);
                 assertEquals(2, roundtrip.rows().get("sessions"));
+                assertEquals(1, roundtrip.rows().get("live_mob_kills"));
                 assertEquals(remoteQueue, StorageMigrationTest.exportData(returned));
                 assertEquals(first.sha256().get("website_export_events"), roundtrip.sha256().get("website_export_events"));
                 assertEquals(first.sha256().get("website_export_state"), roundtrip.sha256().get("website_export_state"));
                 assertEquals(first.sha256().get("website_match_revisions"), roundtrip.sha256().get("website_match_revisions"));
                 assertEquals(first.sha256().get("duels"), roundtrip.sha256().get("duels"));
                 assertEquals(first.sha256().get("duel_participants"), roundtrip.sha256().get("duel_participants"));
+                assertEquals(first.sha256().get("participant_mob_kills"), roundtrip.sha256().get("participant_mob_kills"));
                 try (var from = new SettlementStore(mysql); var to = new SettlementStore(returned); var equipment = new SnapshotStore(returned)) {
                     assertEquals(duel, to.duelMatch(duel.sessionId()));
                     assertEquals(from.history(player, 1), to.history(player, 1));
+                    assertEquals(from.mobKills(player), to.mobKills(player));
+                    assertEquals(from.achievementProgress(player), to.achievementProgress(player));
+                    assertEquals(from.achievementProgress(livePlayer), to.achievementProgress(livePlayer));
                     assertEquals(Double.doubleToRawLongBits(preciseDamage), Double.doubleToRawLongBits(to.match(session).participants().getFirst().damage()));
                     assertEquals(SnapshotStore.Status.CONFIRMED, equipment.get(player).status());
                     assertArrayEquals(new byte[]{0, 1, -1, 127}, equipment.get(player).original());

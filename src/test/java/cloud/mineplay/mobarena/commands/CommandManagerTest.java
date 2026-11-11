@@ -51,6 +51,40 @@ class CommandManagerTest {
 
     @AfterEach void cleanup() { bukkit.close(); }
 
+    @Test void achievementAdminCommandsRequireTheirOwnPermissionBeforeAccessingTheService() {
+        commands.onCommand(sender,null,"ma",new String[]{"admin","achievements","status"});
+        commands.onCommand(sender,null,"ma",new String[]{"admin","achievements","sync",UUID.randomUUID().toString()});
+        verify(plugin,never()).achievementStatus();
+        verify(plugin,never()).syncAchievements(any());
+        verify(sender,times(2)).sendMessage(ArenaMessages.error("Missing permission: mobarena.admin.achievements"));
+    }
+
+    @Test void achievementSyncUsesAnExplicitUuidWithoutOfflineProfileLookups() {
+        UUID player = UUID.randomUUID();
+        when(sender.hasPermission("mobarena.admin.achievements")).thenReturn(true);
+        when(plugin.achievementStatus()).thenReturn("Waiting for MineplayAchievements; arena records are retained");
+        commands.onCommand(sender,null,"ma",new String[]{"admin","achievements","status"});
+        commands.onCommand(sender,null,"ma",new String[]{"admin","achievements","sync",player.toString()});
+        verify(plugin).syncAchievements(player);
+        verify(sender).sendMessage(ArenaMessages.info("Waiting for MineplayAchievements; arena records are retained"));
+        bukkit.verify(() -> Bukkit.getOfflinePlayer(any(UUID.class)),never());
+        bukkit.verify(() -> Bukkit.getOfflinePlayer(anyString()),never());
+
+        commands.onCommand(sender,null,"ma",new String[]{"admin","achievements","sync","RyTheFirst"});
+        commands.onCommand(sender,null,"ma",new String[]{"admin","achievements","sync"});
+        commands.onCommand(sender,null,"ma",new String[]{"admin","achievements","sync",player.toString(),"extra"});
+        verify(plugin,times(1)).syncAchievements(any());
+    }
+
+    @Test void achievementProviderFailureIsShownWithoutClaimingProgressWasQueued() {
+        UUID player = UUID.randomUUID();
+        when(sender.hasPermission("mobarena.admin.achievements")).thenReturn(true);
+        doThrow(new IllegalStateException("MineplayAchievements is not enabled.")).when(plugin).syncAchievements(player);
+        assertTrue(commands.onCommand(sender,null,"ma",new String[]{"admin","achievements","sync",player.toString()}));
+        verify(sender).sendMessage(ArenaMessages.error("MineplayAchievements is not enabled."));
+        verify(sender,never()).sendMessage(ArenaMessages.success("Saved arena progress queued for achievement sync: " + player));
+    }
+
     @Test void playerReadCommandsOpenTheirMenusWithoutSendingChatReports() {
         Player player = mock(Player.class);
         UUID playerId = UUID.randomUUID(), sessionId = UUID.randomUUID();

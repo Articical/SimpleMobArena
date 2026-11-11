@@ -33,6 +33,8 @@ class StorageMigrationTest {
         var report = StorageMigration.migrate(source, target, true);
         assertEquals(1, report.rows().get("sessions"));
         assertEquals(1, report.rows().get("participants"));
+        assertEquals(2, report.rows().get("participant_mob_kills"));
+        assertEquals(1, report.rows().get("live_mob_kills"));
         assertEquals(1, report.rows().get("settlements"));
         assertEquals(1, report.rows().get("equipment_snapshots"));
         assertEquals(64, report.sha256().get("equipment_snapshots").length());
@@ -40,6 +42,10 @@ class StorageMigrationTest {
              var originalSnapshots = new SnapshotStore(source); var copiedSnapshots = new SnapshotStore(target)) {
             assertEquals(from.payouts(session), to.payouts(session));
             assertEquals(from.match(session), to.match(session));
+            assertEquals(Map.of("ZOMBIE", 7, "SKELETON", 3), to.matchMobKills(session, PLAYER));
+            assertEquals(from.achievementProgress(PLAYER), to.achievementProgress(PLAYER));
+            assertEquals(from.achievementProgress(new UUID(0, 43)), to.achievementProgress(new UUID(0, 43)));
+            assertEquals(Map.of("GOAT", 2L), to.mobKills(new UUID(0, 43)));
             assertArrayEquals(originalSnapshots.get(PLAYER).original(), copiedSnapshots.get(PLAYER).original());
             assertArrayEquals(originalSnapshots.get(PLAYER).target(), copiedSnapshots.get(PLAYER).target());
             assertEquals(SnapshotStore.Status.RESTORING, copiedSnapshots.get(PLAYER).status());
@@ -212,8 +218,10 @@ class StorageMigrationTest {
         UUID session = UUID.randomUUID();
         try (var store = new SettlementStore(settings); var snapshots = new SnapshotStore(settings)) {
             var result = new SessionResult(session, "spawn", START, START.plusSeconds(120), 3,
-                    new BigDecimal("123.45"), List.of(new SessionResult.Participant(PLAYER, "Alex", 10, 42.5, 120)), false, "ELIMINATED");
+                    new BigDecimal("123.45"), List.of(new SessionResult.Participant(PLAYER, "Alex", 10, 42.5, 120,
+                    Map.of("ZOMBIE", 7, "SKELETON", 3))), false, "ELIMINATED");
             store.prepare(result, EconomySettings.defaults(), START.plusSeconds(120));
+            store.checkpointMobKills(UUID.randomUUID(), new UUID(0, 43), "LiveAlex", Map.of("GOAT", 2));
             store.claim(store.pending(1).getFirst().settlementId(), EconomySettings.defaults(), START.plusSeconds(121));
             UUID token = UUID.randomUUID();
             snapshots.prepare(new SnapshotStore.Entry(PLAYER, token, "knight", new byte[]{0, 1, 2, -1}, null, SnapshotStore.Status.PREPARED));

@@ -14,7 +14,7 @@ Install a Java 25 JDK, set `JAVA_HOME`, then run:
 .\gradlew.bat clean build
 ```
 
-On Linux/macOS use `sh ./gradlew clean build`. Build output is `build/libs/SimpleMobArena-1.0.10.jar`. This single JAR contains SQLite JDBC, its native libraries, MySQL Connector/J and Gson; do not deploy compiled files from the old Eclipse `bin` directory. Tests are in `src/test/java` and reports in `build/reports/tests/test/index.html`.
+On Linux/macOS use `sh ./gradlew clean build`. Build output is `build/libs/SimpleMobArena-1.0.11.jar`. This single JAR contains SQLite JDBC, its native libraries, MySQL Connector/J and Gson; do not deploy compiled files from the old Eclipse `bin` directory. Tests are in `src/test/java` and reports in `build/reports/tests/test/index.html`. The supplied achievements API in `libs/` is compile-only and is not bundled in the plugin.
 
 The existing `src/cloud/mineplay/mobarena` source layout and the `Arena` / `ArenaManager` concepts are retained. Resources live in `src/main/resources`. SQLite and all runtime dependencies are packaged by the `jar` task; the Paper API and Vault economy are supplied by the server.
 
@@ -113,9 +113,11 @@ When PlaceholderAPI is installed, the bundled expansion registers `%simplemobare
 
 ## Playing and administration
 
+Version 1.0.11 adds optional MineplayAchievements integration and per-mob kill records. Schema 6 upgrades automatically on the ledger worker; existing kills and payouts are preserved. Species counts start with this update because older matches did not record mob types. See [Achievements](#achievements) for setup and configurable milestones.
+
 Version 1.0.10 restores creepers with block protection and expands the supported roster to 28 mob types, including llamas. It adds occasional meme rounds, rare rapid-fire skeletons, themed arena examples, class loadout previews and a separate staff entry/build permission. Existing configuration files are preserved: add the new entries to your chosen pool or use one of the complete local-pool examples below. Existing creeper entries are now active again and are validated; malformed creeper settings must be repaired. Drowned remain excluded.
 
-Version 1.0.8 adds per-arena mob sets, potion kits, 1v1 duels and team duels. Existing arena files default to `mode: MOB_ARENA` and retain the global mob pool. Existing class/config files are preserved; merge the new fields below where needed. SQLite/MySQL ledger schema 5 upgrades automatically; retain backups for downgrades.
+Version 1.0.8 adds per-arena mob sets, potion kits, 1v1 duels and team duels. Existing arena files default to `mode: MOB_ARENA` and retain the global mob pool. Existing class/config files are preserved; merge the new fields below where needed. SQLite/MySQL ledger upgrades automatically; retain backups for downgrades.
 
 Version 1.0.9 isolates class configuration failures from inventory recovery. An invalid class is unavailable until repaired; valid classes continue loading. A malformed classes file disables class choices, while personal gear remains available only when the configured equipment mode permits it. An invalid equipment mode disables new joins. Actual snapshot/database recovery failures still trigger recovery protection. Correct the reported YAML path and run `/ma admin reload` while arenas are idle; reload reports remaining equipment errors and cancels stale class lookups.
 
@@ -384,6 +386,39 @@ Tridents are melee-only in the MVP; retrieve any already-thrown trident or fishi
 
 Snapshots include inventory, armor, offhand, XP, level, effects, health, food, game mode and original location, plus supporting movement/status values. Restoration replaces slots rather than adding items. The exact restore target is persisted before application, player data is saved while interaction is locked, then the snapshot is confirmed. Confirmed snapshots are not replayed. There is no atomic transaction spanning Minecraft player files and SQLite; process-crash and external-plugin interaction tests remain required.
 
+## Achievements
+
+Install the **full MineplayAchievements plugin** alongside SimpleMobArena. The supplied `mineplay-achievements-api-1.0.0.jar` is a build dependency, not an installable plugin. MobArena works without the achievements service and still records statistics. On first startup it writes [achievements.yml](src/main/resources/achievements.yml); existing files are preserved.
+
+The default catalogue has **101 achievements**: general mob-kill, match, completed-wave and duel milestones, plus 25, 100 and 500 kills for each of the 28 supported mob types. Targets, names, descriptions, rarity, AP, icons, prerequisites and announcements are configurable. These achievements award AP through the central plugin; they do not add cash, items or prefixes. Use `enabled: false` to stop registration and reporting without stopping arena statistics.
+
+Sources use the `mineplay_mobarena` namespace and the owner `SimpleMobArena`:
+
+| Source | Authoritative value |
+| --- | --- |
+| `total_kills` | Credited PvE mob kills from historical match records and committed live checkpoints |
+| `matches_played` | Recorded, started PvE matches; cancelled started matches retain their contributions |
+| `highest_wave` | Highest completed-wave count in the player's recorded PvE matches, matching `/ma stats` |
+| `duels_played` | Recorded, started duels and team duels, including cancelled matches |
+| `duel_wins` | Recorded noncancelled wins for the player's team |
+| `zombie_kills`, `skeleton_kills`, etc. | Lifetime credited kills of that Bukkit entity type, including committed live checkpoints; recorded since 1.0.11 |
+
+For example, `mineplay_mobarena:zombie_kills` drives `mineplay_mobarena:zombie/hunter`, `mineplay_mobarena:zombie/slayer` and `mineplay_mobarena:zombie/master`. Husks and strays have their own types; a rapid-fire skeleton is still a skeleton. Only legitimate credited arena kills count. Mounts, evoker-summoned vexes, environmental deaths, self-exploding creepers, outsiders and PvP kills add no mob-type credit. Directly pooled vexes count normally.
+
+Kill progress updates during the match. Each player's current total and per-mob counts are collected into an absolute session snapshot, with repeated kills combined before a write. Pending snapshots flush every 10 server ticks on the ledger worker. Once committed, the bridge reports the saved totals to MineplayAchievements, so a pinned zombie-kill tracker can advance while the player is still fighting. At a healthy 20 TPS this starts about every half-second, plus asynchronous database/API time; normal tracker updates should arrive within about a second. Startup, slow services and retries can take longer.
+
+Live checkpoints are stored in `live_mob_kills`. Finishing a match commits its full breakdown to `participant_mob_kills` and removes the corresponding live rows in the same transaction, so the kills count once. A pending settlement outbox preserves the final breakdown for replay; old outbox files remain readable. Eliminated and disconnected players keep their committed kill progress. A crash leaves committed checkpoints available for achievement replay, without inventing a completed match, wave result or payout. Kills still waiting for their checkpoint write can be lost in an abrupt crash; recording is asynchronous, not a disk write inside each death event.
+
+Match, completed-wave and duel achievements still update from saved final results. `/ma stats`, leaderboards and class unlocks also keep their existing finished-match totals, so they can differ from a live kill achievement tracker, including after a crash interrupted a match. Existing records without species information retain their aggregate kills without invented type counts. The website v1 payloads remain unchanged and do not export live checkpoints or the per-mob breakdown; see [WEBSITE_DATA_HANDOFF.md](WEBSITE_DATA_HANDOFF.md).
+
+SQL queries and checkpoint writes use the ledger worker. The bridge never waits for persistence futures on the server thread; it returns Bukkit callbacks there explicitly. It registers sources and ordered definitions before reporting absolute totals, retries failed operations with backoff, and replays stored players after startup/service replacement. Committed live checkpoints, login, saved match results and a paged scan every five minutes catch up missed reports. Repeated reports use saved absolute totals rather than adding kills again. Missing service, failed sync or a malformed catalogue does not disable arena play or payouts; local checkpoints continue to record while the achievement service is unavailable.
+
+`/ma admin achievements status` shows readiness or a configuration/service problem. `/ma admin achievements sync [player UUID]` queues saved totals for that UUID, or your own UUID in game. Both require `mobarena.admin.achievements` (included in `mobarena.admin`, default op). Console must supply a UUID. No offline profile lookup is performed.
+
+Restart after editing the catalogue. Increase its positive `revision` (or the affected entry's revision) when changing an existing definition. Keep IDs stable and do not also define them in the central plugin's configuration. Registrations persist there: removing a local entry does not delete an already registered achievement. To decrease progress administratively, stop MobArena reporting and correct both the authoritative arena records and central achievements data before resuming; ordinary replay is monotonic.
+
+MineplayAchievements generates `plugins/MineplayAchievements/mineplay-achievements.zip` after registrations. Install the updated ZIP in the main world's `datapacks` directory and restart for native advancement presentation. Central AP/progress persistence can work before that presentation pack is installed.
+
 ## Citizens arena menu NPCs
 
 With Citizens enabled, stand at a safe lobby location outside every enabled arena and run:
@@ -463,7 +498,7 @@ Storage is selected at startup. Stop the server before changing it. Changing the
 
 ### Offline migration
 
-The `migrateStorage` Gradle task copies between selected backends, including SQLite to MySQL, MySQL to SQLite and file-to-file copies. It requires a completely empty destination, preserves the source, and includes equipment snapshots, audit records, mob and duel results, website source identity, revisions, exact queued payload bytes and delivery/backfill metadata. First upgrade the source to ledger schema 5 by running this plugin with website export disabled, then stop it. Keep both the server and any other database writer/publisher stopped for the entire migration.
+The `migrateStorage` Gradle task copies between selected backends, including SQLite to MySQL, MySQL to SQLite and file-to-file copies. It requires a completely empty destination, preserves the source, and includes equipment snapshots, audit records, mob and duel results, per-mob kill breakdowns, website source identity, revisions, exact queued payload bytes and delivery/backfill metadata. First upgrade the source to ledger schema 6 by running this plugin with website export disabled, then stop it. Keep both the server and any other database writer/publisher stopped for the entire migration.
 
 1. Stop Paper cleanly and back up the complete plugin directory and matching player data.
 2. Create source and target copies of the full `config.yml` with their respective `storage` sections. Do not switch the server's active configuration yet.

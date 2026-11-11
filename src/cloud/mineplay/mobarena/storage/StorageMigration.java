@@ -25,6 +25,8 @@ public final class StorageMigration {
     private static final List<Table> TABLES = List.of(
             new Table("sessions", "session_id", false),
             new Table("participants", "session_id,player_id", false),
+            new Table("participant_mob_kills", "session_id,player_id,mob_type", false),
+            new Table("live_mob_kills", "session_id,player_id,mob_type", false),
             new Table("settlements", "settlement_id", false),
             new Table("settlement_audit", "id", false),
             new Table("website_export_state", "id", false),
@@ -141,7 +143,7 @@ public final class StorageMigration {
     }
 
     private static void validateSource(Connections connections, boolean mysql) throws SQLException {
-        for (var pair : Map.of("ledger", 5, "equipment", 1).entrySet()) {
+        for (var pair : Map.of("ledger", 6, "equipment", 1).entrySet()) {
             Connection connection = pair.getKey().equals("equipment") ? connections.equipment : connections.ledger;
             String sql = mysql ? "SELECT version FROM mobarena_schema WHERE component='" + pair.getKey() + "'" : "PRAGMA user_version";
             try (var statement = connection.createStatement(); var rows = statement.executeQuery(sql)) {

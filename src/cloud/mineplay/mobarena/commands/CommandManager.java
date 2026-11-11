@@ -26,7 +26,7 @@ import java.util.function.Consumer;
 /** Command dispatch owns permission checks; arena services validate all mutations again. */
 public final class CommandManager implements CommandExecutor, TabCompleter {
     private static final List<String> PLAYER_COMMANDS = List.of("join", "leave", "list", "info", "classes", "stats", "history", "duels", "match", "top", "admin");
-    private static final List<String> ADMIN_COMMANDS = List.of("create", "delete", "mode", "mobset", "teamselection", "setteam", "addteam", "setplayer", "addplayer", "setmob", "addmob", "clearspawns", "setexit", "setoutsider", "setpos1", "setpos2", "setup", "start", "stop", "forcewave", "reload", "status", "enable", "economy", "payouts", "reconcile", "npc", "website");
+    private static final List<String> ADMIN_COMMANDS = List.of("create", "delete", "mode", "mobset", "teamselection", "setteam", "addteam", "setplayer", "addplayer", "setmob", "addmob", "clearspawns", "setexit", "setoutsider", "setpos1", "setpos2", "setup", "start", "stop", "forcewave", "reload", "status", "enable", "economy", "payouts", "reconcile", "npc", "website", "achievements");
     private final SimpleMobArena plugin;
     private final ArenaMenu menu;
 
@@ -229,6 +229,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         switch (action) {
             case "npc" -> npc(sender,args);
             case "website" -> website(sender,args);
+            case "achievements" -> achievements(sender,args);
             case "reload" -> {
                 plugin.getArenaManager().reloadArenas();
                 success(sender, "Configuration and arenas reloaded.");
@@ -241,7 +242,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                     warning(sender, "Affected equipment choices are unavailable. Fix the settings, then run /ma admin reload.");
                 }
                 message(sender, "Check the console and /ma admin economy for validation errors.");
-                message(sender, "Website export and storage settings take effect after a server restart.");
+                message(sender, "Achievements, website export and storage settings take effect after a server restart.");
             }
             case "economy" -> message(sender, plugin.getEconomyService().status());
             case "payouts" -> {
@@ -577,6 +578,22 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
             default -> throw new IllegalArgumentException("Usage: /ma admin website <status|backfill|retry <event UUID>>");
         }
     }
+    private void achievements(CommandSender sender, String[] args) {
+        requireArgs(args,3,"/ma admin achievements <status|sync [player UUID]>");
+        switch (args[2].toLowerCase(Locale.ROOT)) {
+            case "status" -> {
+                requireExactArgs(args,3,"/ma admin achievements status");
+                message(sender,plugin.achievementStatus());
+            }
+            case "sync" -> {
+                requireExactArgs(args,args.length==3 ? 3 : 4,"/ma admin achievements sync [player UUID]");
+                UUID player = args.length==4 ? parseUuid(args[3]) : requirePlayer(sender).getUniqueId();
+                plugin.syncAchievements(player);
+                success(sender,"Saved arena progress queued for achievement sync: " + player);
+            }
+            default -> throw new IllegalArgumentException("Usage: /ma admin achievements <status|sync [player UUID]>");
+        }
+    }
     private static void requireArgs(String[] args, int count, String usage) { if (args.length < count) throw new IllegalArgumentException("Usage: " + usage); }
     private static void requireExactArgs(String[] args, int count, String usage) { if (args.length != count) throw new IllegalArgumentException("Usage: " + usage); }
     private static Player requirePlayer(CommandSender sender) { if (sender instanceof Player player) return player; throw new IllegalArgumentException("This action requires an in-game player."); }
@@ -600,6 +617,8 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                 ? matches(List.of("create","bind","unbind","list"),args[2]) : List.of();
             if (args[1].equalsIgnoreCase("website")) return args.length == 3
                 ? matches(List.of("status","backfill","retry"),args[2]) : List.of();
+            if (args[1].equalsIgnoreCase("achievements")) return args.length == 3
+                ? matches(List.of("status","sync"),args[2]) : List.of();
             if (args.length == 4 && args[1].equalsIgnoreCase("enable")) return matches(List.of("true", "false"), args[3]);
             if (args.length == 4 && args[1].equalsIgnoreCase("reconcile")) return matches(List.of("CONFIRM", "VOID"), args[3]);
             if (args.length == 4 && args[1].equalsIgnoreCase("clearspawns")) return matches(List.of("player", "mob", "red", "blue", "all"), args[3]);

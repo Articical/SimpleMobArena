@@ -8,6 +8,8 @@ import cloud.mineplay.mobarena.equipment.EquipmentService;
 import cloud.mineplay.mobarena.events.ArenaListener;
 import cloud.mineplay.mobarena.messages.ArenaMessages;
 import cloud.mineplay.mobarena.integration.CitizensArenaNpc;
+import cloud.mineplay.mobarena.integration.AchievementIntegration;
+import java.util.UUID;
 import net.kyori.adventure.text.Component;
 import org.bukkit.*;
 import org.bukkit.event.*;
@@ -23,12 +25,15 @@ public final class SimpleMobArena extends JavaPlugin {
     private ArenaListener arenaListener;
     private AutoCloseable placeholders;
     private CitizensArenaNpc citizensArenaNpc;
+    private AchievementIntegration achievements;
+    private String achievementFailure;
     private NamespacedKey sessionKey;
     private long ticks;
     @Override public void onEnable() {
         instance = this; sessionKey = new NamespacedKey(this,"session");
         saveDefaultConfig();
         if (!new java.io.File(getDataFolder(),"classes.yml").exists()) saveResource("classes.yml",false);
+        if (!new java.io.File(getDataFolder(),"achievements.yml").exists()) saveResource("achievements.yml",false);
         if (!new java.io.File(getDataFolder(),"arenas").exists()) {
             saveResource("arenas/spawn-example.yml",false);
             saveResource("arenas/duel-example.yml",false);
@@ -51,6 +56,12 @@ public final class SimpleMobArena extends JavaPlugin {
             CommandManager commands = new CommandManager(this);
             java.util.Objects.requireNonNull(getCommand("mobarena")).setExecutor(commands);
             getCommand("mobarena").setTabCompleter(commands);
+            getServer().getPluginManager().registerEvents(new Listener() {
+                @EventHandler public void enabled(org.bukkit.event.server.PluginEnableEvent event) {
+                    if (event.getPlugin().getName().equals("MineplayAchievements")) startAchievements();
+                }
+            },this);
+            startAchievements();
             try {
                 citizensArenaNpc = new CitizensArenaNpc(this,commands::openMenu);
                 citizensArenaNpc.start();
@@ -90,6 +101,11 @@ public final class SimpleMobArena extends JavaPlugin {
         }
     }
     @Override public void onDisable() {
+        if (economyService != null) {
+            economyService.setAchievementCheckpoint(null);
+            economyService.setLiveAchievementCheckpoint(null);
+        }
+        closeAchievements();
         if (citizensArenaNpc != null) citizensArenaNpc.close();
         if (placeholders != null) try { placeholders.close(); } catch (Exception error) { getLogger().warning("Could not unregister placeholders: "+error.getMessage()); }
         if (arenaManager != null) arenaManager.stopAllArenas();
@@ -102,6 +118,40 @@ public final class SimpleMobArena extends JavaPlugin {
     public EconomyService getEconomyService() { return economyService; }
     public ArenaListener getArenaListener() { return arenaListener; }
     public CitizensArenaNpc getCitizensArenaNpc() { return citizensArenaNpc; }
+    public String achievementStatus() {
+        return achievements != null ? achievements.status() : achievementFailure != null ? achievementFailure
+            : "MineplayAchievements is not enabled. Arena statistics are still recorded.";
+    }
+    public void syncAchievements(UUID player) {
+        if (achievements == null) throw new IllegalStateException(achievementStatus());
+        if (!achievements.requestSync(player)) throw new IllegalStateException(achievementStatus());
+    }
+    private void startAchievements() {
+        if (achievements != null || !getServer().getPluginManager().isPluginEnabled("MineplayAchievements")) return;
+        try {
+            // Resolve the optional API only here, so its absence cannot link-fail core arena startup.
+            Class.forName("uk.co.mineplay.achievements.api.Achievements",false,getClassLoader());
+            Class<?> bridge = Class.forName("cloud.mineplay.mobarena.achievements.MineplayAchievementsBridge",true,getClassLoader());
+            achievements = (AchievementIntegration) bridge.getConstructor(JavaPlugin.class,EconomyService.class).newInstance(this,economyService);
+            achievements.start();
+            economyService.setAchievementCheckpoint(achievements::requestSync);
+            economyService.setLiveAchievementCheckpoint(achievements::reportLive);
+            achievementFailure = null;
+        } catch (Exception | LinkageError error) {
+            closeAchievements();
+            Throwable cause = error instanceof java.lang.reflect.InvocationTargetException invocation ? invocation.getCause() : error;
+            achievementFailure = "Achievements unavailable: " + (cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage());
+            getLogger().log(java.util.logging.Level.WARNING,achievementFailure + ". Arena statistics continue to be recorded.",cause);
+        }
+    }
+    private void closeAchievements() {
+        AchievementIntegration previous = achievements;
+        achievements = null;
+        if (previous != null) try { previous.close(); }
+        catch (RuntimeException | LinkageError error) {
+            getLogger().log(java.util.logging.Level.WARNING,"Could not close the optional achievements integration",error);
+        }
+    }
     public NamespacedKey sessionKey() { return sessionKey; }
     public long ticks() { return ticks; }
 }

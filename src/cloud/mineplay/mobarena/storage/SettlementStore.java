@@ -2,6 +2,7 @@ package cloud.mineplay.mobarena.storage;
 
 import cloud.mineplay.mobarena.duels.DuelResult;
 import cloud.mineplay.mobarena.economy.EconomySettings;
+import cloud.mineplay.mobarena.economy.AchievementProgress;
 import cloud.mineplay.mobarena.economy.MatchDetails;
 import cloud.mineplay.mobarena.economy.MatchPerformance;
 import cloud.mineplay.mobarena.economy.PlayerStatistics;
@@ -25,6 +26,9 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 
 /** Single-writer SQLite ledger. No Bukkit API is used in this class. */
@@ -70,14 +74,15 @@ public final class SettlementStore implements AutoCloseable {
                 version = rows.getInt(1);
             }
         }
-        if (version > 5) throw new SQLException("Ledger schema is newer than this plugin; refusing to downgrade");
-        for (int next = version + 1; next <= 5; next++) {
+        if (version > 6) throw new SQLException("Ledger schema is newer than this plugin; refusing to downgrade");
+        for (int next = version + 1; next <= 6; next++) {
             String resource = switch (next) {
                 case 1 -> mysql ? "/db/001-mysql.sql" : "/db/001-initial.sql";
                 case 2 -> "/db/002-match-details.sql";
                 case 3 -> mysql ? "/db/003-reporting-views-mysql.sql" : "/db/003-reporting-views.sql";
                 case 4 -> mysql ? "/db/004-website-export-mysql.sql" : "/db/004-website-export.sql";
                 case 5 -> mysql ? "/db/005-duels-mysql.sql" : "/db/005-duels.sql";
+                case 6 -> mysql ? "/db/006-mob-kills-mysql.sql" : "/db/006-mob-kills.sql";
                 default -> throw new IllegalStateException();
             };
             String schema;
@@ -134,10 +139,8 @@ public final class SettlementStore implements AutoCloseable {
     /** Atomically reserves all participants' caps before any external payment can happen. */
     public synchronized boolean prepare(SessionResult result, EconomySettings settings, Instant now) throws SQLException {
         return transaction(() -> {
-            try (var existing = connection.prepareStatement("SELECT 1 FROM sessions WHERE session_id=?")) {
-                existing.setString(1, result.sessionId().toString());
-                try (var rows = existing.executeQuery()) { if (rows.next()) return false; }
-            }
+            if (hasSession(result.sessionId())) return false;
+            validateFinalMobKills(result);
             BigDecimal recordedPot = RewardCalculator.capPot(settings, result.prizePot());
             try (var statement = connection.prepareStatement("INSERT INTO sessions(session_id,arena_id,started_at,finished_at,completed_waves,total_kills,prize_pot,cancelled,settings,unallocated_pot,end_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?)")) {
                 statement.setString(1, result.sessionId().toString());
@@ -157,6 +160,7 @@ public final class SettlementStore implements AutoCloseable {
             BigDecimal allocated = BigDecimal.ZERO;
             for (var participant : result.participants()) {
                 insertParticipant(result.sessionId(), participant);
+                insertMobKills(result.sessionId(), participant);
                 var allocation = allocations.get(participant.playerId());
                 BigDecimal amount = allocation.intended();
                 String caps = allocation.reason();
@@ -176,6 +180,9 @@ public final class SettlementStore implements AutoCloseable {
                 insertSettlement(settlement, result.finishedAt());
                 audit(settlement.settlementId(), now, "SYSTEM", "PREPARED", "amount=" + amount.toPlainString() + "; caps=" + caps);
                 allocated = allocated.add(amount);
+            }
+            try (var statement = connection.prepareStatement("DELETE FROM live_mob_kills WHERE session_id=?")) {
+                statement.setString(1,result.sessionId().toString()); statement.executeUpdate();
             }
             setUnallocated(result.sessionId(), recordedPot.subtract(allocated));
             website.enqueue(result.sessionId(), now);
@@ -338,6 +345,135 @@ public final class SettlementStore implements AutoCloseable {
             try (var rows = statement.executeQuery()) { if (rows.next()) playerName = rows.getString(1); }
         }
         return new PlayerStatistics(player, sessions, kills, damage, highest, earned, playerName);
+    }
+
+    /** Absolute committed totals, including unfinished kill checkpoints but no invented matches or waves. */
+    public synchronized AchievementProgress achievementProgress(UUID player) throws SQLException {
+        Map<String, Long> totals = new LinkedHashMap<>();
+        try (var statement = connection.prepareStatement("SELECT COUNT(*),COALESCE(SUM(p.kills),0),COALESCE(MAX(s.completed_waves),0) FROM participants p JOIN sessions s ON p.session_id=s.session_id WHERE p.player_id=?")) {
+            statement.setString(1,player.toString());
+            try (var rows = statement.executeQuery()) {
+                rows.next();
+                totals.put("matches_played",rows.getLong(1)); totals.put("total_kills",rows.getLong(2)); totals.put("highest_wave",rows.getLong(3));
+            }
+        }
+        try (var statement = connection.prepareStatement("SELECT COALESCE(SUM(kills),0) FROM live_mob_kills l WHERE player_id=? AND NOT EXISTS(SELECT 1 FROM sessions s WHERE s.session_id=l.session_id)")) {
+            statement.setString(1,player.toString());
+            try (var rows = statement.executeQuery()) { rows.next(); totals.merge("total_kills",rows.getLong(1),Math::addExact); }
+        }
+        try (var statement = connection.prepareStatement("SELECT COUNT(*),COALESCE(SUM(CASE WHEN d.cancelled=0 AND d.winner=p.team THEN 1 ELSE 0 END),0) FROM duel_participants p JOIN duels d ON p.session_id=d.session_id WHERE p.player_id=?")) {
+            statement.setString(1,player.toString());
+            try (var rows = statement.executeQuery()) {
+                rows.next(); totals.put("duels_played",rows.getLong(1)); totals.put("duel_wins",rows.getLong(2));
+            }
+        }
+        for (var kills : mobKills(player).entrySet()) totals.put(kills.getKey().toLowerCase(Locale.ROOT)+"_kills",kills.getValue());
+        String name = player.toString();
+        try (var statement = connection.prepareStatement("SELECT player_name FROM (SELECT p.player_name,s.finished_at,s.session_id FROM participants p JOIN sessions s ON p.session_id=s.session_id WHERE p.player_id=? UNION ALL SELECT p.player_name,d.finished_at,d.session_id FROM duel_participants p JOIN duels d ON p.session_id=d.session_id WHERE p.player_id=? UNION ALL SELECT l.player_name,l.updated_at,l.session_id FROM live_mob_kills l WHERE l.player_id=? AND NOT EXISTS(SELECT 1 FROM sessions s WHERE s.session_id=l.session_id)) names ORDER BY finished_at DESC,session_id DESC LIMIT 1")) {
+            statement.setString(1,player.toString()); statement.setString(2,player.toString()); statement.setString(3,player.toString());
+            try (var rows = statement.executeQuery()) { if (rows.next()) name = rows.getString(1); }
+        }
+        return new AchievementProgress(player,name,totals);
+    }
+
+    /** Keyset paging also includes offline players and duel-only players; it performs no Bukkit lookups. */
+    public synchronized List<UUID> achievementPlayers(UUID after, int limit) throws SQLException {
+        var players = new ArrayList<UUID>();
+        try (var statement = connection.prepareStatement("SELECT player_id FROM (SELECT player_id FROM participants UNION SELECT player_id FROM duel_participants UNION SELECT player_id FROM live_mob_kills) players WHERE player_id>? ORDER BY player_id LIMIT ?")) {
+            statement.setString(1,after == null ? "" : after.toString()); statement.setInt(2,Math.clamp(limit,1,100));
+            try (var rows = statement.executeQuery()) { while (rows.next()) players.add(UUID.fromString(rows.getString(1))); }
+        }
+        return List.copyOf(players);
+    }
+
+    /** Lifetime per-type counters include unfinished durable checkpoints, never legacy untyped kills. */
+    public synchronized Map<String, Long> mobKills(UUID player) throws SQLException {
+        Map<String, Long> kills = new LinkedHashMap<>();
+        try (var statement = connection.prepareStatement("SELECT mob_type,SUM(kills) FROM (SELECT mob_type,kills FROM participant_mob_kills WHERE player_id=? UNION ALL SELECT l.mob_type,l.kills FROM live_mob_kills l WHERE l.player_id=? AND NOT EXISTS(SELECT 1 FROM sessions s WHERE s.session_id=l.session_id)) recorded GROUP BY mob_type ORDER BY mob_type")) {
+            statement.setString(1,player.toString()); statement.setString(2,player.toString());
+            try (var rows = statement.executeQuery()) { while (rows.next()) kills.put(rows.getString(1),rows.getLong(2)); }
+        }
+        return Map.copyOf(kills);
+    }
+
+    /** Persist absolute match counters before notifying achievements; stale/repeated snapshots cannot reduce them. */
+    public synchronized AchievementProgress checkpointMobKills(UUID session, UUID player, String name,
+                                                               Map<String, Integer> counts) throws SQLException {
+        java.util.Objects.requireNonNull(session);
+        var snapshot = new SessionResult.Participant(player,name,Integer.MAX_VALUE,0,0,counts);
+        transaction(() -> {
+            if (hasSession(session)) return null;
+            Map<String, Integer> previous = new LinkedHashMap<>();
+            try (var statement = connection.prepareStatement("SELECT mob_type,kills FROM live_mob_kills WHERE session_id=? AND player_id=?")) {
+                statement.setString(1,session.toString()); statement.setString(2,player.toString());
+                try (var rows = statement.executeQuery()) { while (rows.next()) previous.put(rows.getString(1),rows.getInt(2)); }
+            }
+            Map<String, Integer> merged = new LinkedHashMap<>(previous);
+            snapshot.mobKills().forEach((type,count) -> merged.merge(type,count,Math::max));
+            // Bound the combined snapshot too, even when a caller sends disjoint partial updates.
+            new SessionResult.Participant(player,snapshot.playerName(),Integer.MAX_VALUE,0,0,merged);
+            String updated = Instant.now().toString();
+            try (var insert = connection.prepareStatement("INSERT INTO live_mob_kills(session_id,player_id,mob_type,player_name,kills,updated_at) VALUES(?,?,?,?,?,?)");
+                 var update = connection.prepareStatement("UPDATE live_mob_kills SET player_name=?,kills=?,updated_at=? WHERE session_id=? AND player_id=? AND mob_type=?")) {
+                for (var entry : merged.entrySet()) {
+                    if (entry.getValue() == 0) continue;
+                    if (previous.containsKey(entry.getKey())) {
+                        update.setString(1,snapshot.playerName()); update.setInt(2,entry.getValue()); update.setString(3,updated);
+                        update.setString(4,session.toString()); update.setString(5,player.toString()); update.setString(6,entry.getKey()); update.addBatch();
+                    } else {
+                        insert.setString(1,session.toString()); insert.setString(2,player.toString()); insert.setString(3,entry.getKey());
+                        insert.setString(4,snapshot.playerName()); insert.setInt(5,entry.getValue()); insert.setString(6,updated); insert.addBatch();
+                    }
+                }
+                insert.executeBatch(); update.executeBatch();
+            }
+            return null;
+        });
+        return achievementProgress(player);
+    }
+
+    private boolean hasSession(UUID session) throws SQLException {
+        try (var statement = connection.prepareStatement("SELECT 1 FROM sessions WHERE session_id=?")) {
+            statement.setString(1,session.toString());
+            try (var rows = statement.executeQuery()) { return rows.next(); }
+        }
+    }
+
+    /** Reject corrupt/incomplete final results instead of discarding already committed achievement evidence. */
+    private void validateFinalMobKills(SessionResult result) throws SQLException {
+        Map<UUID, Map<String, Integer>> finalCounts = new LinkedHashMap<>();
+        for (var player : result.participants()) finalCounts.put(player.playerId(),player.mobKills());
+        try (var statement = connection.prepareStatement("SELECT player_id,mob_type,kills FROM live_mob_kills WHERE session_id=?")) {
+            statement.setString(1,result.sessionId().toString());
+            try (var rows = statement.executeQuery()) {
+                while (rows.next()) {
+                    Map<String, Integer> types = finalCounts.get(UUID.fromString(rows.getString(1)));
+                    if (types == null || types.getOrDefault(rows.getString(2),0) < rows.getInt(3))
+                        throw new SQLException("Final match result would lose checkpointed mob kills for session " + result.sessionId());
+                }
+            }
+        }
+    }
+
+    /** Match-focused breakdown for reporting; missing rows mean the type was not recorded. */
+    public synchronized Map<String, Integer> matchMobKills(UUID session, UUID player) throws SQLException {
+        Map<String, Integer> kills = new LinkedHashMap<>();
+        try (var statement = connection.prepareStatement("SELECT mob_type,kills FROM participant_mob_kills WHERE session_id=? AND player_id=? ORDER BY mob_type")) {
+            statement.setString(1,session.toString()); statement.setString(2,player.toString());
+            try (var rows = statement.executeQuery()) { while (rows.next()) kills.put(rows.getString(1),rows.getInt(2)); }
+        }
+        return Map.copyOf(kills);
+    }
+
+    private void insertMobKills(UUID session, SessionResult.Participant player) throws SQLException {
+        if (player.mobKills().isEmpty()) return;
+        try (var statement = connection.prepareStatement("INSERT INTO participant_mob_kills(session_id,player_id,mob_type,kills) VALUES(?,?,?,?)")) {
+            for (var entry : player.mobKills().entrySet()) {
+                statement.setString(1,session.toString()); statement.setString(2,player.playerId().toString());
+                statement.setString(3,entry.getKey()); statement.setInt(4,entry.getValue()); statement.addBatch();
+            }
+            statement.executeBatch();
+        }
     }
 
     public synchronized List<PlayerStatistics> top(int limit) throws SQLException {

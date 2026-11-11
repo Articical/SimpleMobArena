@@ -1,0 +1,220 @@
+# SimpleMobArena owns this catalogue. Do not also install these IDs in the
+# MineplayAchievements plugin's achievements.yml.
+# Requires the optional MineplayAchievements plugin; game statistics are retained without it.
+enabled: true
+
+# Increase this positive revision before changing existing targets, titles, points,
+# rarity or other definition fields. Registered definitions persist across restarts.
+# Each achievement/tier may override revision if only that definition changed.
+revision: 1
+announce: true
+
+# Source names are fixed authoritative MobArena totals. Kill totals update after
+# asynchronous live checkpoints; match, wave and duel sources use final recorded results.
+# Available: total_kills, matches_played, highest_wave, duels_played, duel_wins,
+# and each supported mob's lower-case name followed by _kills (e.g. zombie_kills).
+# Per-mob totals start with this plugin version; old aggregate kills have no species data.
+# IDs stay stable when targets change. Dependencies use local IDs and are registered first.
+# No cash, items or prefixes are awarded here; these definitions award achievement points.
+achievements:
+  first_blood:
+    source: total_kills
+    target: 1
+    name: First Blood
+    description: Get your first arena mob kill.
+    rarity: COMMON
+    points: 10
+  holding_the_line:
+    source: total_kills
+    target: 100
+    name: Holding the Line
+    description: Kill 100 arena mobs.
+    rarity: UNCOMMON
+    points: 25
+    prerequisites: [first_blood]
+    parent: first_blood
+  crowd_control:
+    source: total_kills
+    target: 1000
+    name: Crowd Control
+    description: Kill 1,000 arena mobs.
+    rarity: RARE
+    points: 50
+    prerequisites: [holding_the_line]
+    parent: holding_the_line
+  arena_veteran:
+    source: total_kills
+    target: 10000
+    name: Arena Veteran
+    description: Kill 10,000 arena mobs.
+    rarity: EPIC
+    points: 100
+    prerequisites: [crowd_control]
+    parent: crowd_control
+  arena_legend:
+    source: total_kills
+    target: 50000
+    name: Arena Legend
+    description: Kill 50,000 arena mobs.
+    rarity: LEGENDARY
+    points: 250
+    prerequisites: [arena_veteran]
+    parent: arena_veteran
+  stepping_in:
+    source: matches_played
+    target: 1
+    name: Stepping In
+    description: Play your first mob arena match.
+    icon: minecraft:iron_chestplate
+    rarity: COMMON
+  regular:
+    source: matches_played
+    target: 10
+    name: Arena Regular
+    description: Play 10 mob arena matches.
+    icon: minecraft:iron_chestplate
+    rarity: UNCOMMON
+    prerequisites: [stepping_in]
+    parent: stepping_in
+  home_ground:
+    source: matches_played
+    target: 100
+    name: Home Ground
+    description: Play 100 mob arena matches.
+    icon: minecraft:iron_chestplate
+    rarity: EPIC
+    prerequisites: [regular]
+    parent: regular
+  warmed_up:
+    source: highest_wave
+    target: 3
+    name: Warmed Up
+    description: Play in a mob arena match that clears three waves.
+    icon: minecraft:shield
+    rarity: COMMON
+  double_digits:
+    source: highest_wave
+    target: 10
+    name: Double Digits
+    description: Play in a mob arena match that clears ten waves.
+    icon: minecraft:shield
+    rarity: UNCOMMON
+    prerequisites: [warmed_up]
+    parent: warmed_up
+  deep_run:
+    source: highest_wave
+    target: 20
+    name: Deep Run
+    description: Play in a mob arena match that clears twenty waves.
+    icon: minecraft:shield
+    rarity: RARE
+    prerequisites: [double_digits]
+    parent: double_digits
+  thirty_strong:
+    source: highest_wave
+    target: 30
+    name: Thirty Strong
+    description: Play in a mob arena match that clears thirty waves.
+    icon: minecraft:shield
+    rarity: EPIC
+    prerequisites: [deep_run]
+    parent: deep_run
+  gloves_off:
+    source: duels_played
+    target: 1
+    name: Gloves Off
+    description: Play your first duel or team duel.
+    icon: minecraft:iron_axe
+    rarity: COMMON
+  challenger:
+    source: duels_played
+    target: 25
+    name: Challenger
+    description: Play 25 duels or team duels.
+    icon: minecraft:iron_axe
+    rarity: RARE
+    prerequisites: [gloves_off]
+    parent: gloves_off
+  first_win:
+    source: duel_wins
+    target: 1
+    name: First Win
+    description: Win a duel or team duel.
+    icon: minecraft:golden_sword
+    rarity: COMMON
+  winning_form:
+    source: duel_wins
+    target: 10
+    name: Winning Form
+    description: Win ten duels or team duels.
+    icon: minecraft:golden_sword
+    rarity: UNCOMMON
+    prerequisites: [first_win]
+    parent: first_win
+  champion:
+    source: duel_wins
+    target: 100
+    name: Champion
+    description: Win 100 duels or team duels.
+    icon: minecraft:golden_sword
+    rarity: EPIC
+    prerequisites: [winning_form]
+    parent: winning_form
+
+# Expand the tiers below for these mob types. All 33 progress sources remain
+# available even if a mob is removed from this list. Removing a registered
+# definition here does not delete it from MineplayAchievements.
+mob-types:
+  - ZOMBIE
+  - HUSK
+  - SKELETON
+  - STRAY
+  - WITHER_SKELETON
+  - SPIDER
+  - CAVE_SPIDER
+  - BLAZE
+  - ENDERMAN
+  - SILVERFISH
+  - ENDERMITE
+  - PILLAGER
+  - VINDICATOR
+  - WITCH
+  - ZOMBIFIED_PIGLIN
+  - PIGLIN_BRUTE
+  - CREEPER
+  - RAVAGER
+  - SHULKER
+  - IRON_GOLEM
+  - BREEZE
+  - GOAT
+  - PIGLIN
+  - PHANTOM
+  - EVOKER
+  - BEE
+  - VEX
+  - LLAMA
+
+# Stable IDs are <mob>/<tier>, for example zombie/hunter. Each tier requires
+# the previous one; targets must increase in this order. {mob} is the display
+# name, {mob_plural} is its plural, and {target} is the configured kill count.
+# For a separate custom milestone, add an achievements entry with source:
+# zombie_kills (or another supported source), its own ID, target and title.
+mob-kill-tiers:
+  hunter:
+    target: 25
+    name: '{mob} Hunter'
+    description: 'Kill {target} {mob_plural} in the arena.'
+    rarity: COMMON
+    points: 10
+  slayer:
+    target: 100
+    name: '{mob} Slayer'
+    description: 'Kill {target} {mob_plural} in the arena.'
+    rarity: UNCOMMON
+    points: 25
+  master:
+    target: 500
+    name: '{mob} Master'
+    description: 'Kill {target} {mob_plural} in the arena.'
+    rarity: RARE
+    points: 50

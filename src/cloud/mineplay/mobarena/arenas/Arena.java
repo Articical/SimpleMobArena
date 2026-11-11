@@ -417,7 +417,9 @@ public final class Arena {
         UUID mount = mounts.remove(entity.getUniqueId());
         if (mount != null) { Entity vehicle = Bukkit.getEntity(mount); if (vehicle != null) vehicle.remove(); temporary.remove(mount); }
         if (killer != null && isParticipant(killer.getUniqueId()) && contains(killer.getLocation())) {
-            participants.get(killer.getUniqueId()).kills++;
+            Participation contribution = participants.get(killer.getUniqueId());
+            contribution.recordMobKill(entity.getType().name());
+            plugin.getEconomyService().recordMobKills(sessionId,contribution.playerId,contribution.playerName,contribution.mobKills());
             sounds.play(Cue.MOB_KILL,killer);
         }
         if (state.waveComplete()) {
@@ -541,7 +543,7 @@ public final class Arena {
             });
         } else if (startedAt != null) {
             SessionResult result = new SessionResult(sessionId,getId(),startedAt,finish,completedWaves,prizePot,
-                participants.values().stream().map(p -> new SessionResult.Participant(p.playerId,p.playerName,p.kills,p.damage,p.seconds(finish))).toList(),cancelled,recordedReason);
+                participants.values().stream().map(p -> new SessionResult.Participant(p.playerId,p.playerName,p.kills,p.damage,p.seconds(finish),p.mobKills())).toList(),cancelled,recordedReason);
             plugin.getEconomyService().finish(result).whenComplete((unused,error) -> {
                 if (error != null) plugin.getLogger().severe("Settlement failed for "+result.sessionId()+": "+error.getMessage());
             });

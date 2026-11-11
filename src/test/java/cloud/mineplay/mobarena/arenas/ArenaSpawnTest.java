@@ -434,6 +434,7 @@ class ArenaSpawnTest {
         SessionResult.Participant contribution = result.participants().getFirst();
         assertEquals(playerId, contribution.playerId());
         assertEquals(1, contribution.kills());
+        assertEquals(Map.of("ZOMBIE",1),contribution.mobKills());
         assertEquals(37.5, contribution.damage());
         assertTrue(contribution.participationSeconds() >= 125);
         assertEquals(GameState.WAITING, arena.getArenaState());
@@ -992,6 +993,31 @@ class ArenaSpawnTest {
         when(economy.waveReward(anyInt(), anyInt())).thenReturn(BigDecimal.ZERO);
         when(economy.capPot(any(BigDecimal.class))).thenAnswer(call -> call.getArgument(0));
         return new DynamicSpawns();
+    }
+
+    @Test void matchRecordsTheCreditedMobTypeExactlyOnceAndKeepsEarlierContributions() {
+        DynamicSpawns spawns = configureScalingScenario(config -> {
+            config.set("waves.base-mobs",2);
+            config.set("waves.mobs-per-wave-per-player",0);
+        });
+        startPlayers(1);
+        var zombie = spawns.spawned.getFirst();
+        spawns.kill(zombie);
+        arena.mobDeath(zombie.entity,player); // Repeated death notifications cannot add another type count.
+        verify(economy).recordMobKills(any(UUID.class),eq(playerId),eq("ArenaPlayer"),eq(Map.of("ZOMBIE",1)));
+        verify(economy,never()).finish(any());
+        tickAt(currentTick.get()+1);
+        var husk = spawns.spawned.getLast();
+        when(husk.entity.getType()).thenReturn(EntityType.HUSK);
+        spawns.kill(husk);
+        arena.eliminate(player,"left the match");
+        ArgumentCaptor<SessionResult> results = ArgumentCaptor.forClass(SessionResult.class);
+        verify(economy).finish(results.capture());
+        var participation = results.getValue().participants().getFirst();
+        assertEquals(2,participation.kills());
+        assertEquals(Map.of("ZOMBIE",1,"HUSK",1),participation.mobKills());
+        verify(economy,times(2)).recordMobKills(eq(results.getValue().sessionId()),eq(playerId),eq("ArenaPlayer"),anyMap());
+        assertThrows(UnsupportedOperationException.class,() -> participation.mobKills().put("BEE",100));
     }
 
     @Test void themedRoundKeepsItsPoolAcrossBatchesAndCooldownResetsWithSession() {
